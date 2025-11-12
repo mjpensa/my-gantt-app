@@ -41,6 +41,10 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         researchText += `\n--- End of file: ${file.originalname} ---\n`;
       }
     }
+    // Truncate if too large (keep first 50k chars to prevent API issues)
+    if (researchText.length > 50000) {
+      researchText = researchText.substring(0, 50000) + '\n\n[Content truncated due to length]';
+    }
   } catch (e) {
     console.error("File extraction error:", e);
     return res.status(500).json({ error: "Error processing uploaded files." });
@@ -99,36 +103,55 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: schema
+        responseSchema: schema,
+        maxOutputTokens: 8192,
+        temperature: 0.2
       }
     };
 
-    // Exponential backoff for retries
-    let response;
-    for (let i = 0; i < 3; i++) {
-      response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (response.ok) break;
-      await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** i)));
-    }
-
-    if (!response.ok) {
-      throw new Error(`API call failed with status: ${response.status}`);
-    }
-
-    const result = await response.json();
+    let ganttData = null;
+    let lastError = null;
     
-    // Check if API returned valid data
-    if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
-      console.error('Invalid API response:', JSON.stringify(result));
-      throw new Error('Invalid response from AI API');
+    // Retry up to 3 times for JSON parsing errors
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API call failed with status: ${response.status} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        
+        // Check if API returned valid data
+        if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+          console.error('Invalid API response:', JSON.stringify(result));
+          throw new Error('Invalid response from AI API');
+        }
+        
+        const jsonText = result.candidates[0].content.parts[0].text;
+        ganttData = JSON.parse(jsonText);
+        
+        // If we got here, parsing succeeded
+        break;
+        
+      } catch (parseError) {
+        lastError = parseError;
+        console.log(`Attempt ${attempt + 1} failed:`, parseError.message);
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
     }
     
-    const jsonText = result.candidates[0].content.parts[0].text;
-    const ganttData = JSON.parse(jsonText);
+    if (!ganttData) {
+      throw lastError || new Error('Failed to generate chart after 3 attempts');
+    }
     
     // Validate ganttData structure
     if (!ganttData.timeColumns || !ganttData.data) {
