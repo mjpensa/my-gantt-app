@@ -15,7 +15,7 @@ const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-
 const app = express();
 const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(filename);
+const __dirname = dirname(__filename); // <-- THE FIX: Was 'filename', now '__filename'
 
 // --- Middleware ---
 app.use(express.json());
