@@ -42,8 +42,8 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       }
     }
     // Truncate if too large (keep first 50k chars to prevent API issues)
-    if (researchText.length > 50000) {
-      researchText = researchText.substring(0, 50000) + '\n\n[Content truncated due to length]';
+    if (researchText.length > 10000) {
+      researchText = researchText.substring(0, 10000) + '\n\n[Content truncated due to length]';
     }
   } catch (e) {
     console.error("File extraction error:", e);
@@ -111,7 +111,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
     let ganttData = null;
     let lastError = null;
-    
+    let rawGeminiOutput = null;
     // Retry up to 3 times for JSON parsing errors
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -127,19 +127,16 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         }
 
         const result = await response.json();
-        
         // Check if API returned valid data
         if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
           console.error('Invalid API response:', JSON.stringify(result));
           throw new Error('Invalid response from AI API');
         }
-        
         const jsonText = result.candidates[0].content.parts[0].text;
+        rawGeminiOutput = jsonText;
         ganttData = JSON.parse(jsonText);
-        
         // If we got here, parsing succeeded
         break;
-        
       } catch (parseError) {
         lastError = parseError;
         console.log(`Attempt ${attempt + 1} failed:`, parseError.message);
@@ -148,9 +145,9 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         }
       }
     }
-    
     if (!ganttData) {
-      throw lastError || new Error('Failed to generate chart after 3 attempts');
+      // If parsing failed, return the raw Gemini output for debugging
+      return res.status(500).json({ error: `Failed to parse Gemini output after 3 attempts`, rawGeminiOutput });
     }
     
     // Validate ganttData structure
