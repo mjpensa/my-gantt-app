@@ -19,7 +19,7 @@ const __dirname = dirname(__filename);
 
 // --- Middleware ---
 app.use(express.json());
-app.use(express.static(join(__dirname, 'public'))); // Serve our HTML, CSS, JS
+app.use(express.static(join(__dirname, 'Public'))); // Serve our HTML, CSS, JS
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
 // --- API Endpoint for Chart Generation ---
