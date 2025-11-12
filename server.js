@@ -15,14 +15,11 @@ const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-
 const app = express();
 const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename); 
+const __dirname = dirname(__filename);
 
 // --- Middleware ---
 app.use(express.json());
-//
-// <-- THE FIX: Changed 'public' to 'Public' to match your folder name
-app.use(express.static(join(__dirname, 'Public'))); 
-//
+app.use(express.static(join(__dirname, 'Public'))); // Serve our HTML, CSS, JS
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
 // --- API Endpoint for Chart Generation ---
@@ -50,17 +47,23 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   }
 
   // 2. Build the prompt for the Gemini API
-  const geminiSystemPrompt = `You are a project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart. You must respond ONLY with a valid JSON object matching the defined schema.
+  //
+  // <-- UPDATED PROMPT: Refined rules to prevent inference.
+  //
+  const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart. You must respond ONLY with a valid JSON object matching the defined schema.
   
-  **CRITICAL: All strings in your JSON response (like 'title') MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from any text you place inside the JSON to prevent parsing errors.** Replace them with a single space.
+  **CRITICAL RULES FOR JSON OUTPUT:**
+  1.  **NO INFERENCE:** Your job is to extract and organize, not to invent. For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text. **Do not make up or infer your own summaries.**
+  2.  **BE CONCISE:** If a heading or phrase is very long, you may shorten it, but you must stick to the original words. Keep titles under 150 characters.
+  3.  **BE CLEAN:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
   
-  Logic for timeColumns:
+  **TIME LOGIC:**
   - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
   - 2-12 months: Use "Months" (e.g., ["Jan 2026", "Feb 2026"])
   - 1-3 years: Use "Quarters" (e.g., ["Q1 2026", "Q2 2026"])
   - 3+ years: Use "Years" (e.g., ["2026", "2027"])
   
-  Logic for bars:
+  **BAR LOGIC:**
   - 'startCol' is the 1-based index of the column where the task begins.
   - 'endCol' is the 1-based index of the column where the task ends, PLUS ONE. A task in "W1" has startCol: 1, endCol: 2. A task from "W1" to "W2" has startCol: 1, endCol: 3.
   - Assign colors logically ("blue", "ochre", "orange", "green").`;
@@ -104,45 +107,68 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: schema
+        responseSchema: schema,
+        maxOutputTokens: 8192,
+        temperature: 0.2
       }
     };
 
-    // Exponential backoff for retries
-    let response;
-    for (let i = 0; i < 3; i++) {
-      response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (response.ok) break;
-      await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** i)));
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("API Error Response:", errorText);
-      throw new Error(`API call failed with status: ${response.status}`);
-    }
-
-    const result = await response.json();
+    let ganttData = null;
+    let lastError = null;
     
-    if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
-        console.error('Invalid API response structure:', JSON.stringify(result));
-        throw new Error('Invalid response from AI API. No candidates found.');
+    // Retry up to 3 times for JSON parsing errors
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API call failed with status: ${response.status} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        
+        // Check if API returned valid data
+        if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+          console.error('Invalid API response:', JSON.stringify(result));
+          throw new Error('Invalid response from AI API');
+        }
+        
+        const jsonText = result.candidates[0].content.parts[0].text;
+        ganttData = JSON.parse(jsonText);
+        
+        // If we got here, parsing succeeded
+        break;
+        
+      } catch (parseError) {
+        lastError = parseError;
+        console.log(`Attempt ${attempt + 1} failed:`, parseError.message);
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
     }
-      
-    const jsonText = result.candidates[0].content.parts[0].text;
-    const ganttData = JSON.parse(jsonText); // This is where the original error happened
+    
+    if (!ganttData) {
+      throw lastError || new Error('Failed to generate chart after 3 attempts');
+    }
+    
+    // Validate ganttData structure
+    if (!ganttData.timeColumns || !ganttData.data) {
+      console.error('Invalid gantt data structure:', ganttData);
+      throw new Error('AI returned incomplete chart data');
+    }
     
     // 5. Send the pure JSON data back to the frontend
     res.json(ganttData);
 
   } catch (e) {
     console.error("API call error:", e);
-    // Send a more detailed error to the frontend
-    res.status(500).json({ error: `Error generating chart data from AI: ${e.message}` });
+    res.status(500).json({ error: `Error generating chart data: ${e.message}` });
   }
 });
 
