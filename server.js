@@ -15,11 +15,11 @@ const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-
 const app = express();
 const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(filename);
 
 // --- Middleware ---
 app.use(express.json());
-app.use(express.static(join(__dirname, 'Public'))); // Serve our HTML, CSS, JS
+app.use(express.static(join(__dirname, 'public'))); // Serve our HTML, CSS, JS
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
 // --- API Endpoint for Chart Generation ---
@@ -41,10 +41,6 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         researchText += `\n--- End of file: ${file.originalname} ---\n`;
       }
     }
-    // Truncate if too large (keep first 50k chars to prevent API issues)
-    if (researchText.length > 10000) {
-      researchText = researchText.substring(0, 10000) + '\n\n[Content truncated due to length]';
-    }
   } catch (e) {
     console.error("File extraction error:", e);
     return res.status(500).json({ error: "Error processing uploaded files." });
@@ -52,6 +48,8 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   const geminiSystemPrompt = `You are a project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart. You must respond ONLY with a valid JSON object matching the defined schema.
+  
+  **CRITICAL: All strings in your JSON response (like 'title') MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from any text you place inside the JSON to prevent parsing errors.** Replace them with a single space.
   
   Logic for timeColumns:
   - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
@@ -103,65 +101,45 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: schema,
-        maxOutputTokens: 8192,
-        temperature: 0.2
+        responseSchema: schema
       }
     };
 
-    let ganttData = null;
-    let lastError = null;
-    let rawGeminiOutput = null;
-    // Retry up to 3 times for JSON parsing errors
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API call failed with status: ${response.status} - ${errorText}`);
-        }
-
-        const result = await response.json();
-        // Check if API returned valid data
-        if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
-          console.error('Invalid API response:', JSON.stringify(result));
-          throw new Error('Invalid response from AI API');
-        }
-        const jsonText = result.candidates[0].content.parts[0].text;
-        rawGeminiOutput = jsonText;
-        ganttData = JSON.parse(jsonText);
-        // If we got here, parsing succeeded
-        break;
-      } catch (parseError) {
-        lastError = parseError;
-        console.log(`Attempt ${attempt + 1} failed:`, parseError.message);
-        if (attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-        }
-      }
+    // Exponential backoff for retries
+    let response;
+    for (let i = 0; i < 3; i++) {
+      response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) break;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** i)));
     }
-    if (!ganttData) {
-      // If parsing failed, return the raw Gemini output for debugging
-      return res.status(500).json({ error: `Failed to parse Gemini output after 3 attempts`, rawGeminiOutput });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("API Error Response:", errorText);
+      throw new Error(`API call failed with status: ${response.status}`);
     }
+
+    const result = await response.json();
     
-    // Validate ganttData structure
-    if (!ganttData.timeColumns || !ganttData.data) {
-      console.error('Invalid gantt data structure:', ganttData);
-      throw new Error('AI returned incomplete chart data');
+    if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+        console.error('Invalid API response structure:', JSON.stringify(result));
+        throw new Error('Invalid response from AI API. No candidates found.');
     }
+      
+    const jsonText = result.candidates[0].content.parts[0].text;
+    const ganttData = JSON.parse(jsonText); // This is where the original error happened
     
     // 5. Send the pure JSON data back to the frontend
     res.json(ganttData);
 
   } catch (e) {
     console.error("API call error:", e);
-    res.status(500).json({ error: `Error generating chart data: ${e.message}` });
+    // Send a more detailed error to the frontend
+    res.status(500).json({ error: `Error generating chart data from AI: ${e.message}` });
   }
 });
 
