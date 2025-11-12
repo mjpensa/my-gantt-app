@@ -120,15 +120,28 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     }
 
     const result = await response.json();
+    
+    // Check if API returned valid data
+    if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+      console.error('Invalid API response:', JSON.stringify(result));
+      throw new Error('Invalid response from AI API');
+    }
+    
     const jsonText = result.candidates[0].content.parts[0].text;
     const ganttData = JSON.parse(jsonText);
+    
+    // Validate ganttData structure
+    if (!ganttData.timeColumns || !ganttData.data) {
+      console.error('Invalid gantt data structure:', ganttData);
+      throw new Error('AI returned incomplete chart data');
+    }
     
     // 5. Send the pure JSON data back to the frontend
     res.json(ganttData);
 
   } catch (e) {
     console.error("API call error:", e);
-    res.status(500).json({ error: "Error generating chart data from AI." });
+    res.status(500).json({ error: `Error generating chart data: ${e.message}` });
   }
 });
 

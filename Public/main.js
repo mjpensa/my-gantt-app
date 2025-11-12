@@ -52,6 +52,11 @@ async function handleChartGenerate(event) {
     // 4. Get the JSON data from the server
     const ganttData = await response.json();
 
+    // 4.5. Validate the data structure
+    if (!ganttData || !ganttData.timeColumns || !ganttData.data) {
+      throw new Error('Invalid chart data received from server');
+    }
+
     // 5. Render the chart
     setupChart(ganttData);
 
