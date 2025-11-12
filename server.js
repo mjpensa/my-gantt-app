@@ -48,14 +48,15 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   //
-  // <-- UPDATED PROMPT: Refined rules to prevent inference.
+  // <-- UPDATED PROMPT: Added "DATA ONLY" rule.
   //
   const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart. You must respond ONLY with a valid JSON object matching the defined schema.
   
   **CRITICAL RULES FOR JSON OUTPUT:**
-  1.  **NO INFERENCE:** Your job is to extract and organize, not to invent. For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text. **Do not make up or infer your own summaries.**
-  2.  **BE CONCISE:** If a heading or phrase is very long, you may shorten it, but you must stick to the original words. Keep titles under 150 characters.
-  3.  **BE CLEAN:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
+  1.  **DATA ONLY:** The JSON fields are for *data only*. **DO NOT** add any notes, commentary, summaries, or explanations (like "CRITICAL NOTE: ...") into the JSON data fields. The 'title' field should contain *only* the chart's title, and nothing else.
+  2.  **NO INFERENCE:** For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text. **Do not make up or infer your own summaries.**
+  3.  **CONCISE TITLES:** If a heading or phrase is very long, shorten it, but stick to the original words. Keep all titles under 150 characters.
+  4.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
   
   **TIME LOGIC:**
   - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
@@ -160,7 +161,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     // Validate ganttData structure
     if (!ganttData.timeColumns || !ganttData.data) {
       console.error('Invalid gantt data structure:', ganttData);
-      throw new Error('AI returned incomplete chart data');
+      throw new Error('AI returned incomplete chart data'); // This is the error you are seeing
     }
     
     // 5. Send the pure JSON data back to the frontend
