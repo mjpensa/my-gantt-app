@@ -143,7 +143,10 @@ function setupChart(ganttData) {
     }
 
     // 3. Add the bar (if it's a task and has bar data)
-    if (!isSwimlane && row.bar) {
+    //
+    // <-- UPDATED LOGIC: Check for bar and non-null startCol
+    //
+    if (!isSwimlane && row.bar && row.bar.startCol != null) {
       const bar = row.bar;
       
       const barEl = document.createElement('div');
