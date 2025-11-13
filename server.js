@@ -531,13 +531,23 @@ function buildGanttData(factSheet, requestedDates) {
   
   for (const entityName of swimlanes) {
     
-    // --- FIX: Find all tasks for this swimlane *FIRST* ---
+    // --- STEP 1: Find all tasks for this swimlane ---
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
     
-    // --- FIX: *Only if tasks exist*, add the swimlane and its tasks ---
-    if (tasksForThisSwimlane.length > 0) {
+    // --- NEW FIX: STEP 2: Find tasks that *will actually be rendered* ---
+    const renderableTasks = [];
+    for (const task of tasksForThisSwimlane) {
+      // Check if task falls in range. Color doesn't matter for this check.
+      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, "default"); 
+      if (bar.startCol !== null || bar.endCol !== null) {
+        renderableTasks.push({ task, bar }); // Store the task and its calculated bar
+      }
+    }
+
+    // --- NEW FIX: *Only if renderable tasks exist*, add the swimlane and its tasks ---
+    if (renderableTasks.length > 0) {
       
       // 3. Add the swimlane header
       ganttDataRows.push({
@@ -546,21 +556,17 @@ function buildGanttData(factSheet, requestedDates) {
         entity: entityName // Add entity for frontend logic
       });
 
-      // 4. Add all the tasks
-      for (const task of tasksForThisSwimlane) {
-        // Use the entityName (which we've confirmed matches) to get the color
-        const color = swimlaneColors[entityName.trim()] || "default";
-        const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
+      // 4. Add all the (already-vetted) renderable tasks
+      for (const { task, bar } of renderableTasks) {
+        // Get the *correct* color now
+        bar.color = swimlaneColors[entityName.trim()] || "default";
         
-        // Only add tasks that are *within* the chart's time range
-        if (bar.startCol !== null || bar.endCol !== null) {
-          ganttDataRows.push({
-            title: task.taskName,
-            isSwimlane: false,
-            bar: bar,
-            entity: entityName // Use the canonical entityName
-          });
-        }
+        ganttDataRows.push({
+          title: task.taskName,
+          isSwimlane: false,
+          bar: bar, // Use the pre-calculated bar object
+          entity: entityName // Use the canonical entityName
+        });
       }
     }
     // --- END OF FIX ---
