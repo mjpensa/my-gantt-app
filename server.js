@@ -18,7 +18,7 @@ const __dirname = dirname(__filename);
 
 // --- Middleware ---
 app.use(express.json());
-// *** FIX: Use 'Public' (uppercase) to match your folder structure ***
+// Use 'Public' (uppercase) to match your folder structure
 app.use(express.static(join(__dirname, 'Public'))); 
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
@@ -112,6 +112,16 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   let allTasks = [];
   let projectTitle = "Project Roadmap"; // Default
 
+  // --- NEW: Add a one-time call to get the requested date range ---
+  let requestedDates = { startDate: null, endDate: null };
+  try {
+    console.log("--- Analyzing User Prompt for Date Range ---");
+    requestedDates = await getRequestedDates(userPrompt, researchTextCache);
+  } catch (e) {
+    console.error("Could not parse requested dates, falling back to earliest.");
+  }
+  // ---
+
   try {
     // 3. Loop through each swimlane and make a *small* API call
     for (const swimlane of swimlaneDefinitions) {
@@ -184,9 +194,10 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     } // End of swimlane loop
 
     // 8. "Builder" Step: Server builds the final Gantt data
-    const ganttData = buildGanttData(allTasks, swimlaneDefinitions, projectTitle);
+    // --- NEW: Pass requestedDates to the builder ---
+    const ganttData = buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDates);
     
-    // 9. Send *only* the Gantt data to the frontend
+    // 9. Send the Gantt data to the frontend
     // *** FIX: Send the ganttData object *directly* ***
     res.json(ganttData);
 
@@ -281,9 +292,48 @@ app.post('/get-task-analysis', async (req, res) => {
 // -------------------------------------------------------------------
 
 /**
- * Builds the final Gantt chart data from the collected tasks.
+ * --- NEW: Helper to get the user's requested date range ---
  */
-function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
+async function getRequestedDates(userPrompt, researchText) {
+  const geminiSystemPrompt = `You are a date extraction bot. Analyze the user prompt and research. Extract the *explicitly requested* start and end date for the chart.
+  If the user asks for a "10-year plan from 2020", you must return { "startDate": "2020", "endDate": "2030" }.
+  If the user says "a 2-year project starting Q1 2026", return { "startDate": "Q1 2026", "endDate": "Q4 2027" }.
+  If no explicit range is requested, return { "startDate": null, "endDate": null }.
+  You must respond *only* with the JSON object.`;
+  
+  const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
+
+  const schema = {
+    type: "OBJECT",
+    properties: {
+      startDate: { type: "STRING" },
+      endDate: { type: "STRING" }
+    },
+    required: ["startDate", "endDate"]
+  };
+  
+  const payload = {
+    contents: [{ parts: [{ text: geminiUserQuery }] }],
+    systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: schema,
+      temperature: 0,
+      topP: 1,
+      topK: 1
+    }
+  };
+  
+  // Use callGemini helper
+  return await callGemini(payload, 1); // Only try once
+}
+
+
+/**
+ * Builds the final Gantt chart data from the collected tasks.
+ * --- NEW: Accepts requestedDates object ---
+ */
+function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDates) {
   
   // 1. Determine Time Scale (Deterministically)
   let allDates = [];
@@ -292,20 +342,33 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
     if (task.endDate) allDates.push(parseDate(task.endDate));
   });
   
-  const validDates = allDates.filter(Boolean);
-  // Handle case with no valid dates
-  if (validDates.length === 0) {
-    // Default to a 1-year, 4-quarter chart
-    const startYear = new Date().getFullYear();
-    return {
-      title: projectTitle,
-      timeColumns: [`Q1 ${startYear}`, `Q2 ${startYear}`, `Q3 ${startYear}`, `Q4 ${startYear}`],
-      data: [] // No data to show
-    };
+  let validDates = allDates.filter(Boolean);
+  
+  // --- NEW LOGIC: Use requested dates if available ---
+  let minDate, maxDate;
+  
+  if (requestedDates.startDate) {
+    minDate = parseDate(requestedDates.startDate);
+  } else if (validDates.length > 0) {
+    minDate = new Date(Math.min.apply(null, validDates));
+  } else {
+    minDate = new Date(new Date().getFullYear(), 0, 1); // Default to Jan 1 this year
   }
   
-  const minDate = new Date(Math.min.apply(null, validDates));
-  const maxDate = new Date(Math.max.apply(null, validDates));
+  if (requestedDates.endDate) {
+    maxDate = parseDate(requestedDates.endDate);
+  } else if (validDates.length > 0) {
+    maxDate = new Date(Math.max.apply(null, validDates));
+  } else {
+    maxDate = new Date(minDate.getFullYear() + 1, 0, 1); // Default to 1 year later
+  }
+  // ---
+
+  // Handle case with no valid dates
+  if (minDate >= maxDate) {
+    minDate = new Date(new Date().getFullYear(), 0, 1);
+    maxDate = new Date(minDate.getFullYear() + 1, 11, 31);
+  }
   
   const totalMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
   
@@ -328,16 +391,15 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
   } else if (totalMonths <= 36) {
     intervalType = "Quarters";
     let d = new Date(minDate);
-    // Align to start of quarter
-    d.setMonth(Math.floor(d.getMonth() / 3) * 3);
+    d.setMonth(Math.floor(d.getMonth() / 3) * 3); // Align to start of quarter
     while(d <= maxDate) {
       timeColumns.push(`Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}`);
       d.setMonth(d.getMonth() + 3);
     }
   } else {
     intervalType = "Years";
-    const startYear = minDate.getFullYear() || new Date().getFullYear();
-    const endYear = maxDate.getFullYear() || startYear + 1;
+    const startYear = minDate.getFullYear();
+    const endYear = maxDate.getFullYear();
     for(let y = startYear; y <= endYear; y++) timeColumns.push(y.toString());
   }
   
@@ -357,13 +419,15 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
     for (const task of tasksForThisSwimlane) {
       const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, task.color);
       
-      ganttDataRows.push({
-        title: task.taskName,
-        isSwimlane: false,
-        bar: bar,
-        // Add entity to the data row for the frontend
-        entity: task.entity 
-      });
+      // --- NEW: Only add tasks that are *within* the chart's time range ---
+      if (bar.startCol !== null || bar.endCol !== null) {
+        ganttDataRows.push({
+          title: task.taskName,
+          isSwimlane: false,
+          bar: bar,
+          entity: task.entity 
+        });
+      }
     }
   }
 
@@ -389,7 +453,6 @@ function parseDate(dateStr) {
   if (dateStr.match(/^\d{4}$/)) { // "2024"
     return new Date(dateStr, 0, 1);
   }
-  // Try parsing month-year
   const monthYear = dateStr.match(/(\w{3}) (\d{4})/);
   if (monthYear) {
     try {
@@ -412,32 +475,48 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
   let endCol = null;
   
   for(let i=0; i < timeColumns.length; i++) {
-    if (isDateInColumn(startDate, timeColumns[i], intervalType)) {
+    if (isDateInColumn(startDate, timeColumns[i], intervalType, "start")) {
       startCol = i + 1; // 1-based index
       break;
     }
   }
 
+  // --- NEW: Use chart end date as a fallback ---
   const effectiveEndDate = endDate || timeColumns[timeColumns.length - 1];
   
   for(let i=0; i < timeColumns.length; i++) {
-    if (isDateInColumn(effectiveEndDate, timeColumns[i], intervalType)) {
+    if (isDateInColumn(effectiveEndDate, timeColumns[i], intervalType, "end")) {
       endCol = i + 2; // 1-based index + 1 (for exclusive end)
     }
   }
   
   if (startCol && !endCol) {
-    // If it started but didn't end, it must run off the chart
     endCol = timeColumns.length + 1;
   }
   
-  // Handle tasks that are just a single point in time (e.g., in "2024")
   if (startCol && !endCol && startDate === effectiveEndDate) {
     endCol = startCol + 1;
   }
   
-  if (startCol === null) {
-     return { startCol: null, endCol: null, color: color };
+  // --- NEW: Handle tasks that end before the chart starts or start after it ends ---
+  if (startCol === null && endCol === null) {
+    // Check if task is entirely outside the range
+    const start = parseDate(startDate);
+    const end = parseDate(effectiveEndDate);
+    const chartStart = parseDate(timeColumns[0]);
+    const chartEnd = parseDate(timeColumns[timeColumns.length - 1]);
+
+    if (end && chartStart && end < chartStart) {
+      return { startCol: null, endCol: null, color: color }; // Ends before chart
+    }
+    if (start && chartEnd && start > chartEnd) {
+      return { startCol: null, endCol: null, color: color }; // Starts after chart
+    }
+  }
+  
+  // If it starts before the chart, clip it to the start
+  if (startCol === null && endCol !== null) {
+    startCol = 1;
   }
 
   return { startCol, endCol, color };
@@ -446,7 +525,7 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
 /**
  * Helper function to check if a date string falls within a column.
  */
-function isDateInColumn(dateStr, colName, intervalType) {
+function isDateInColumn(dateStr, colName, intervalType, dateType) {
   if (!dateStr || !colName) return false;
   
   const parsedDate = parseDate(dateStr);
@@ -454,26 +533,42 @@ function isDateInColumn(dateStr, colName, intervalType) {
   
   const colDate = parseDate(colName);
   if (!colDate) return false;
+
+  const dYear = parsedDate.getFullYear();
+  const cYear = colDate.getFullYear();
   
   if (intervalType === "Years") {
-    return parsedDate.getFullYear() === colDate.getFullYear();
+    return dYear === cYear;
   }
+  
+  const dMonth = parsedDate.getMonth();
+  const cMonth = colDate.getMonth();
+
   if (intervalType === "Quarters") {
-    const dYear = parsedDate.getFullYear();
-    const cYear = colDate.getFullYear();
-    const dQuarter = Math.floor(parsedDate.getMonth() / 3);
-    const cQuarter = Math.floor(colDate.getMonth() / 3);
+    const dQuarter = Math.floor(dMonth / 3);
+    const cQuarter = Math.floor(cMonth / 3);
     
-    // Handle "2024" matching "Q1 2024"
-    if (dateStr.match(/^\d{4}$/)) {
-      return dYear === cYear;
+    // "2024" (as a start date) should match "Q1 2024"
+    if (dateStr.match(/^\d{4}$/) && dateType === "start") {
+      return dYear === cYear && cQuarter === 0;
     }
-    // Handle "Q1 2024" matching "Q1 2024"
+    // "2024" (as an end date) should match "Q4 2024"
+    if (dateStr.match(/^\d{4}$/) && dateType === "end") {
+      return dYear === cYear && cQuarter === 3;
+    }
+    // "Q1 2024" matching "Q1 2024"
     return dYear === cYear && dQuarter === cQuarter;
   }
   if (intervalType === "Months") {
-    return parsedDate.getFullYear() === colDate.getFullYear() &&
-           parsedDate.getMonth() === colDate.getMonth();
+    // "2024" (as a start date) should match "Jan 2024"
+    if (dateStr.match(/^\d{4}$/) && dateType === "start") {
+      return dYear === cYear && cMonth === 0;
+    }
+    // "2024" (as an end date) should match "Dec 2024"
+    if (dateStr.match(/^\d{4}$/) && dateType === "end") {
+      return dYear === cYear && cMonth === 11;
+    }
+    return dYear === cYear && dMonth === cMonth;
   }
   
   return false; // Default for Weeks or unknown
