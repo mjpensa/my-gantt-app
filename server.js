@@ -203,7 +203,7 @@ app.post('/get-task-analysis', async (req, res) => {
   1.  **NO INFERENCE:** For 'taskName', 'facts', and 'assumptions', you MUST use key phrases and data extracted *directly* from the provided text.
   2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
   3.  **DETERMINE STATUS:** Determine the task's 'status' ("completed", "in-progress", or "not-started") based on the current date (assume "November 2025") and the task's dates.
-  4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
+  4.  **PROVIDE RATIONALE:** You MUST provide a 'rationALE' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
   5.  **CLEAN STRINGS:** All string values MUST be valid JSON strings. You MUST properly escape any characters that would break JSON, such as double quotes (\") and newlines (\\n).`;
   
   const geminiUserQuery = `Research Content:\n${researchTextCache}\n\n**YOUR TASK:** Provide a full, detailed analysis for this specific task:
@@ -335,7 +335,7 @@ function buildGanttData(factSheet, requestedDates) {
   let minDate, maxDate;
   
   // Use requested dates if available
-  if (requestedDates.startDate) {
+  if (requestedDates.startDate && parseDate(requestedDates.startDate)) {
     minDate = parseDate(requestedDates.startDate);
   } else if (validDates.length > 0) {
     minDate = new Date(Math.min.apply(null, validDates));
@@ -343,7 +343,7 @@ function buildGanttData(factSheet, requestedDates) {
     minDate = new Date(new Date().getFullYear(), 0, 1);
   }
   
-  if (requestedDates.endDate) {
+  if (requestedDates.endDate && parseDate(requestedDates.endDate)) {
     maxDate = parseDate(requestedDates.endDate);
   } else if (validDates.length > 0) {
     maxDate = new Date(Math.max.apply(null, validDates));
@@ -402,8 +402,12 @@ function buildGanttData(factSheet, requestedDates) {
     });
     
     // 2. Find all tasks for this swimlane
+    //
+    // --- THIS IS THE FIX ---
+    // We now .trim() both strings to make the match robust
+    //
     const tasksForThisSwimlane = allTasks.filter(
-      task => task.entity === entityName
+      task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
     
     // 3. Add all tasks
@@ -411,6 +415,7 @@ function buildGanttData(factSheet, requestedDates) {
       const color = swimlaneColors[task.entity] || "default";
       const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
       
+      // Only add tasks that are *within* the chart's time range
       if (bar.startCol !== null || bar.endCol !== null) {
         ganttDataRows.push({
           title: task.taskName,
@@ -480,8 +485,14 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
     }
   }
   
-  if (startCol && !endCol) {
-    endCol = timeColumns.length + 1;
+  if (startCol && !endCol && effectiveEndDate) {
+    // If it started, but didn't end (e.g., end date is "2030" but chart ends at "2026")
+    // Check if end date is after chart end
+    const end = parseDate(effectiveEndDate);
+    const chartEnd = parseDate(timeColumns[timeColumns.length - 1]);
+    if(end && chartEnd && end > chartEnd) {
+      endCol = timeColumns.length + 1;
+    }
   }
   
   if (startCol && !endCol && startDate === effectiveEndDate) {
