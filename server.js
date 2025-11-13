@@ -68,11 +68,72 @@ async function callGemini(payload, retryCount = 3) {
       await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
     }
   }
+  // This line should not be reachable if all retries fail, as the error is thrown.
+  throw new Error('All API retry attempts failed.');
 }
 
-// --- "MAPREDUCE" ARCHITECTURE: "MAP" STEP (AI) ---
-// This is the main endpoint for the *initial chart load*.
-// It only fetches the *minimum* data (task names and dates).
+
+// --- "MAPREDUCE" ARCHITECTURE IS NOW A "FACT-CHECKER" ARCHITECTURE ---
+
+// --- STEP 1 (AI): Extract a simple "Fact Sheet" ---
+async function extractFactSheet(userPrompt, researchText) {
+  console.log("--- Calling AI: Extracting Fact Sheet ---");
+
+  // The AI's *only* job is to extract facts. It does *not* build the chart.
+  const factExtractionPrompt = `You are a data-extraction bot. Your job is to read the user's prompt and research files and extract every single project task, its parent entity (e.g., bank, regulatory body), and its start/end dates.
+  
+  You MUST respond with *only* a JSON object matching the schema.
+  
+  **CRITICAL RULES:**
+  1.  **DO NOT** make any decisions about swimlanes or chart structure.
+  2.  Extract *every* task, even minor ones (pilots, testing).
+  3.  'taskName' MUST be a concise summary (under 100 chars) of the task, using keywords from the text.
+  4.  'entity' MUST be the parent organization (e.g., "JPMorgan Chase", "Bank of America", "Citigroup", "Regulatory Drivers", "Industry Standards Development", "Goldman Sachs").
+  5.  'startDate' and 'endDate' MUST be a year (e.g., "2024") or quarter (e.g., "Q1 2025") from the text.
+  6.  If a date is unknown, use "null". If a task is ongoing, set 'endDate' to the end of the project's timeframe (e.g., "2030").
+  7.  Sanitize all strings: remove newlines, tabs, and double quotes.
+  8.  Extract the main project 'projectTitle' from the user prompt or research.`;
+
+  const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
+  
+  const factSchema = {
+    type: "OBJECT",
+    properties: {
+      projectTitle: { type: "STRING" },
+      tasks: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            taskName: { type: "STRING" },
+            entity: { type: "STRING" },
+            startDate: { type: "STRING" },
+            endDate: { type: "STRING" }
+          },
+          required: ["taskName", "entity"]
+        }
+      }
+    },
+    required: ["projectTitle", "tasks"]
+  };
+
+  const payload = {
+    contents: [{ parts: [{ text: geminiUserQuery }] }],
+    systemInstruction: { parts: [{ text: factExtractionPrompt }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: factSchema,
+      maxOutputTokens: 8192,
+      temperature: 0,
+      topP: 1,
+      topK: 1
+    }
+  };
+  
+  return await callGemini(payload);
+}
+
+// --- Main Endpoint ---
 app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   const userPrompt = req.body.prompt;
   researchTextCache = ""; // Clear cache for new request
@@ -99,106 +160,23 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     return res.status(500).json({ error: "Error processing uploaded files." });
   }
 
-  // 2. Define the swimlanes (our deterministic structure)
-  const swimlaneDefinitions = [
-    { entityName: "Regulatory Drivers", color: "orange" },
-    { entityName: "Industry Standards Development", color: "green" },
-    { entityName: "JPMorgan Chase", color: "blue" },
-    { entityName: "Bank of America", color: "blue" },
-    { entityName: "Citigroup", color: "blue" },
-    { entityName: "Goldman Sachs", color: "blue" }
-  ];
-
-  let allTasks = [];
-  let projectTitle = "Project Roadmap"; // Default
-
-  // --- NEW: Add a one-time call to get the requested date range ---
-  let requestedDates = { startDate: null, endDate: null };
   try {
-    console.log("--- Analyzing User Prompt for Date Range ---");
-    requestedDates = await getRequestedDates(userPrompt, researchTextCache);
-  } catch (e) {
-    console.error("Could not parse requested dates, falling back to earliest.");
-  }
-  // ---
-
-  try {
-    // 3. Loop through each swimlane and make a *small* API call
-    for (const swimlane of swimlaneDefinitions) {
-      const { entityName, color } = swimlane;
-      console.log(`--- Analyzing (light): ${entityName} ---`);
-
-      // 4. Define the *lightweight* prompt and schema
-      const geminiSystemPrompt = `You are a data extraction bot. Your job is to analyze the research and find all tasks for a *specific entity*.
-      
-      You MUST respond with *only* a valid JSON object matching the schema.
-      
-      **CRITICAL RULES:**
-      1.  **NO ANALYSIS:** Do not provide facts, assumptions, or rationale.
-      2.  **EXTRACT DATES:** Find the 'startDate' and 'endDate' (e.g., "2024", "Q1 2025", "null").
-      3.  **CLEAN STRINGS:** All string values MUST be sanitized (no newlines, tabs, or double quotes).
-      4.  **MAXIMIZE DETAIL:** Include all distinct tasks (pilots, testing, etc.) for this entity.
-      5.  **PROJECT TITLE:** Extract the main project title from the user prompt or research.`;
-
-      const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchTextCache}\n\n**YOUR TASK:** Extract the project title and all tasks (with dates) for the entity: "${entityName}"`;
-
-      const lightSchema = {
-        type: "OBJECT",
-        properties: {
-          projectTitle: { type: "STRING" },
-          tasks: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                taskName: { type: "STRING" },
-                startDate: { type: "STRING" },
-                endDate: { type: "STRING" }
-              },
-              required: ["taskName"]
-            }
-          }
-        },
-        required: ["projectTitle", "tasks"]
-      };
-
-      // 5. Define the payload
-      const payload = {
-        contents: [{ parts: [{ text: geminiUserQuery }] }],
-        systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: lightSchema,
-          maxOutputTokens: 8192, // This is fine, output will be small
-          temperature: 0,
-          topP: 1,
-          topK: 1
-        }
-      };
-
-      // 6. Call the API
-      const partialData = await callGemini(payload);
-
-      // 7. "Reduce" Step: Collect the tasks
-      if (partialData && partialData.tasks) {
-        for (const task of partialData.tasks) {
-          allTasks.push({
-            ...task,
-            entity: entityName,
-            color: color,
-            isSwimlane: false
-          });
-        }
-        projectTitle = partialData.projectTitle; // Use the latest title
-      }
-    } // End of swimlane loop
-
-    // 8. "Builder" Step: Server builds the final Gantt data
-    // --- NEW: Pass requestedDates to the builder ---
-    const ganttData = buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDates);
+    // 2. --- STEP 1: Call AI to get the simple "Fact Sheet" ---
+    const factSheet = await extractFactSheet(userPrompt, researchTextCache);
     
-    // 9. Send the Gantt data to the frontend
-    // *** FIX: Send the ganttData object *directly* ***
+    // --- Also get the user's requested dates (a small, separate call) ---
+    let requestedDates = { startDate: null, endDate: null };
+    try {
+      console.log("--- Analyzing User Prompt for Date Range ---");
+      requestedDates = await getRequestedDates(userPrompt, researchTextCache);
+    } catch (e) {
+      console.error("Could not parse requested dates, falling back to earliest.");
+    }
+    
+    // 3. --- STEP 2: Server builds the final Gantt data deterministically ---
+    const ganttData = buildGanttData(factSheet, requestedDates);
+    
+    // 4. Send the Gantt data to the frontend
     res.json(ganttData);
 
   } catch (e) {
@@ -333,9 +311,23 @@ async function getRequestedDates(userPrompt, researchText) {
  * Builds the final Gantt chart data from the collected tasks.
  * --- NEW: Accepts requestedDates object ---
  */
-function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDates) {
+function buildGanttData(factSheet, requestedDates) {
   
-  // 1. Determine Time Scale (Deterministically)
+  // --- 1. Define the Deterministic Structure ---
+  // This is our "contract." The structure is *always* this.
+  const swimlaneDefinitions = [
+    { entityName: "Regulatory Drivers", color: "orange" },
+    { entityName: "Industry Standards Development", color: "green" },
+    { entityName: "JPMorgan Chase", color: "blue" },
+    { entityName: "Bank of America", color: "blue" },
+    { entityName: "Citigroup", color: "blue" },
+    { entityName: "Goldman Sachs", color: "blue" }
+  ];
+  
+  const allTasks = factSheet.tasks || [];
+  const projectTitle = factSheet.projectTitle || "Project Roadmap";
+  
+  // 2. Determine Time Scale (Deterministically)
   let allDates = [];
   allTasks.forEach(task => {
     if (task.startDate) allDates.push(parseDate(task.startDate));
@@ -364,8 +356,8 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDa
   }
   // ---
 
-  // Handle case with no valid dates
-  if (minDate >= maxDate) {
+  // Handle case with no valid dates or reversed dates
+  if (!minDate || !maxDate || minDate >= maxDate) {
     minDate = new Date(new Date().getFullYear(), 0, 1);
     maxDate = new Date(minDate.getFullYear() + 1, 11, 31);
   }
@@ -403,8 +395,14 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDa
     for(let y = startYear; y <= endYear; y++) timeColumns.push(y.toString());
   }
   
-  // 2. Build the Final 'ganttData'
+  // 3. Build the Final 'ganttData'
   const ganttDataRows = [];
+  
+  // --- NEW: Map entities to their colors for lookup ---
+  const colorMap = new Map();
+  for (const def of swimlaneDefinitions) {
+    colorMap.set(def.entityName, def.color);
+  }
   
   for (const swimlane of swimlaneDefinitions) {
     ganttDataRows.push({
@@ -413,11 +411,12 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDa
     });
     
     const tasksForThisSwimlane = allTasks.filter(
-      task => !task.isSwimlane && task.entity === swimlane.entityName
+      task => task.entity === swimlane.entityName
     );
     
     for (const task of tasksForThisSwimlane) {
-      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, task.color);
+      const color = colorMap.get(task.entity) || "default";
+      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
       
       // --- NEW: Only add tasks that are *within* the chart's time range ---
       if (bar.startCol !== null || bar.endCol !== null) {
@@ -431,7 +430,7 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle, requestedDa
     }
   }
 
-  // 3. Return the Gantt data object
+  // 4. Return the Gantt data object
   return {
     title: projectTitle,
     timeColumns: timeColumns,
@@ -491,6 +490,8 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
   }
   
   if (startCol && !endCol) {
+    // If it started, but didn't end (e.g., end date is "2030" but chart ends at "2026")
+    // Clip it to the end of the chart
     endCol = timeColumns.length + 1;
   }
   
