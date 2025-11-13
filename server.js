@@ -74,7 +74,7 @@ async function callGemini(payload, retryCount = 3) {
 async function extractFactSheet(userPrompt, researchText) {
   console.log("--- Calling AI: Extracting Fact Sheet ---");
 
-  // --- FIX #2: Add new "Rule 4.5" to enforce entity matching ---
+  // This prompt is correct and includes the critical "ENTITY MATCHING" rule
   const factExtractionPrompt = `You are a data-extraction bot. Your job is to read the user's prompt and research files and extract a "Fact Sheet" containing all entities, tasks, and the project title.
   
   You MUST respond with *only* a JSON object matching the schema.
@@ -167,8 +167,8 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     let requestedDates = { startDate: null, endDate: null };
     try {
       console.log("--- Analyzing User Prompt for Date Range ---");
-      // --- FIX #1: Pass the full researchTextCache for context ---
-      requestedDates = await getRequestedDates(userPrompt, researchTextCache);
+      // --- THIS IS THE FIX: Only pass the userPrompt, not the researchText ---
+      requestedDates = await getRequestedDates(userPrompt);
     } catch (e) {
       console.error("Could not parse requested dates, falling back to earliest.");
     }
@@ -272,15 +272,15 @@ app.post('/get-task-analysis', async (req, res) => {
 /**
  * --- Helper to get the user's requested date range ---
  */
-async function getRequestedDates(userPrompt, researchText) {
-  const geminiSystemPrompt = `You are a date extraction bot. Analyze the user prompt AND the research content. Extract the *explicitly requested* start and end date for the chart.
-  For example, if the prompt or research title mentions "2020-2030", you must return { "startDate": "2020", "endDate": "2030" }.
+async function getRequestedDates(userPrompt) { // --- FIX: Removed researchText ---
+  const geminiSystemPrompt = `You are a date extraction bot. Analyze *only the user's prompt*. Extract the *explicitly requested* start and end date for the chart.
+  If the user's prompt mentions "2020-2030", you must return { "startDate": "2020", "endDate": "2030" }.
   If the user says "a 2-year project starting Q1 2026", return { "startDate": "Q1 2026", "endDate": "Q4 2027" }.
   If no explicit range is requested, return { "startDate": null, "endDate": null }.
   You must respond *only* with the JSON object.`;
   
-  // --- FIX #1: Pass the full research text as context ---
-  const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
+  // --- FIX: Only send the userPrompt ---
+  const geminiUserQuery = `User Prompt: "${userPrompt}"`;
 
   const schema = {
     type: "OBJECT",
@@ -397,34 +397,41 @@ function buildGanttData(factSheet, requestedDates) {
   const swimlanes = factSheet.entities || [];
   
   for (const entityName of swimlanes) {
-    // 1. Add the swimlane header
-    ganttDataRows.push({
-      title: entityName,
-      isSwimlane: true,
-      entity: entityName // Add entity for frontend logic
-    });
     
-    // 2. Find all tasks for this swimlane
+    // --- THIS IS THE FIX ---
+    // 1. *First*, find all tasks for this swimlane
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
     
-    // 3. Add all tasks
-    for (const task of tasksForThisSwimlane) {
-      // Use the entityName from the *loop* to get the color, not task.entity
-      const color = swimlaneColors[entityName.trim()] || "default";
-      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
+    // 2. *Only if tasks exist*, add the swimlane and its tasks
+    if (tasksForThisSwimlane.length > 0) {
       
-      // Only add tasks that are *within* the chart's time range
-      if (bar.startCol !== null || bar.endCol !== null) {
-        ganttDataRows.push({
-          title: task.taskName,
-          isSwimlane: false,
-          bar: bar,
-          entity: entityName // Use the canonical entityName
-        });
+      // 3. Add the swimlane header
+      ganttDataRows.push({
+        title: entityName,
+        isSwimlane: true,
+        entity: entityName // Add entity for frontend logic
+      });
+
+      // 4. Add all the tasks
+      for (const task of tasksForThisSwimlane) {
+        // Use the entityName (which we've confirmed matches) to get the color
+        const color = swimlaneColors[entityName.trim()] || "default";
+        const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
+        
+        // Only add tasks that are *within* the chart's time range
+        if (bar.startCol !== null || bar.endCol !== null) {
+          ganttDataRows.push({
+            title: task.taskName,
+            isSwimlane: false,
+            bar: bar,
+            entity: entityName // Use the canonical entityName
+          });
+        }
       }
     }
+    // --- END OF FIX ---
   }
 
   // 4. Return the Gantt data object
