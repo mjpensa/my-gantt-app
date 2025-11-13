@@ -531,12 +531,12 @@ function buildGanttData(factSheet, requestedDates) {
   
   for (const entityName of swimlanes) {
     
-    // 1. *First*, find all tasks for this swimlane
+    // --- FIX: Find all tasks for this swimlane *FIRST* ---
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
     
-    // 2. *Only if tasks exist*, add the swimlane and its tasks
+    // --- FIX: *Only if tasks exist*, add the swimlane and its tasks ---
     if (tasksForThisSwimlane.length > 0) {
       
       // 3. Add the swimlane header
