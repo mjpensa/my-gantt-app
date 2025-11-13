@@ -82,6 +82,7 @@ async function extractFactSheet(userPrompt, researchText) {
   **CRITICAL RULES:**
   1.  **Extract Entities:** Identify all unique parent entities (e.g., "JPMorgan Chase", "Bank of America", "Citigroup", "Regulatory Drivers", "Industry Standards Development", "Goldman Sachs") and return them in the 'entities' array.
   2.  **Extract Tasks:** Extract *every* task, even minor ones (pilots, testing).
+  2.5. **NO INFERENCE:** You MUST *only* extract tasks that are *explicitly stated* in the text (e.g., "JPM will launch...", "BofA is piloting...", "Task: ..."). Do NOT infer or create tasks based on assumptions, implications, or general statements (e.g., if the text says "ISDA documentation implies adoption", you must NOT create an "Adoption" task). Only extract factual, stated tasks, milestones, or deliverables.
   3.  **'taskName'**: MUST be a concise summary (under 100 chars) of the task, using keywords from the text.
   4.  **'entity'**: MUST be the parent organization the task belongs to.
   4.5. **ENTITY MATCHING:** The 'entity' string in each task *must* be an *exact, case-sensitive match* to one of the strings you included in the 'entities' array.
