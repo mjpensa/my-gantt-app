@@ -174,8 +174,14 @@ body {
   padding-left: 24px; /* THIS is our indent */
   font-weight: 400;
   color: #333;
-  /* Add subtle line for rows */
   border-bottom: 1px dotted #e0e0e0;
+  transition: background-color 0.2s;
+}
+
+/* --- NEW: Hover/Cursor for clickable tasks --- */
+.gantt-row-label.task:hover {
+  background-color: #f0f8ff; /* Light alice blue */
+  cursor: pointer;
 }
 
 /* 11. Bar Area */
@@ -184,6 +190,11 @@ body {
   display: grid;
   border-left: 1px solid #e0e0e0;
   border-bottom: 1px dotted #e0e0e0;
+}
+/* --- NEW: Hover/Cursor for clickable tasks --- */
+.gantt-bar-area.task:hover {
+  background-color: #f0f8ff;
+  cursor: pointer;
 }
 
 .gantt-bar-area.swimlane {
@@ -221,7 +232,6 @@ body {
   justify-content: center;
   padding: 20px 0 0 0;
 }
-
 .export-button {
   font-family: 'Inter', sans-serif;
   font-size: 14px;
@@ -241,4 +251,161 @@ body {
 .export-button:disabled {
   background-color: #a0aec0;
   cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------------- */
+/* --- NEW: ANALYSIS MODAL STYLES --- */
+/* ------------------------------------------------------------------- */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.modal-content {
+  background-color: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+  width: 100%;
+  max-width: 700px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.modal-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+}
+
+.modal-close {
+  font-size: 28px;
+  font-weight: 300;
+  color: #9ca3af;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.modal-close:hover {
+  color: #111827;
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.modal-spinner {
+  width: 32px;
+  height: 32px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #007bff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 40px auto;
+}
+
+.modal-error {
+  color: #b91c1c;
+  font-weight: 500;
+  text-align: center;
+  padding: 20px;
+}
+
+.analysis-section {
+  margin-bottom: 20px;
+}
+.analysis-section:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-section h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  margin-top: 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #f3f4f6;
+  padding-bottom: 4px;
+}
+
+.analysis-section p {
+  font-size: 14px;
+  color: #374151;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+.status-pill.status-completed {
+  color: #065f46;
+  background-color: #d1fae5;
+}
+/* Handle "in-progress" with a dash */
+.status-pill.status-in-progress {
+  color: #92400e;
+  background-color: #fef3c7;
+}
+/* Handle "not-started" with a dash */
+.status-pill.status-not-started {
+  color: #991b1b;
+  background-color: #fee2e2;
+}
+.status-pill.status-n\/a {
+  color: #374151;
+  background-color: #f3f4f6;
+}
+
+
+.analysis-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.analysis-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.analysis-list li:last-child {
+  border-bottom: 0;
+}
+.analysis-list li p {
+  margin: 0;
+  font-size: 14px;
+  color: #374151;
+}
+.analysis-list li .source {
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
 }
