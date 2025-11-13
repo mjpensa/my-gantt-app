@@ -26,10 +26,16 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   const userPrompt = req.body.prompt;
   let researchText = "";
 
-  // 1. Extract text from uploaded files (same as before)
+  // 1. Extract text from uploaded files
   try {
     if (req.files) {
-      for (const file of req.files) {
+      //
+      // --- FIX FOR DETERMINISM (Part 1) ---
+      // Sort files by name to ensure identical input order every time.
+      //
+      const sortedFiles = req.files.sort((a, b) => a.originalname.localeCompare(b.originalname));
+
+      for (const file of sortedFiles) {
         researchText += `\n\n--- Start of file: ${file.originalname} ---\n`;
         if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
           const result = await mammoth.extractRawText({ buffer: file.buffer });
@@ -47,7 +53,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   //
-  // <-- UPDATED PROMPT: Added new rule 6 for MAXIMIZE DETAIL.
+  // <-- UPDATED PROMPT: Stricter rules for time logic.
   //
   const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart.
   
@@ -55,22 +61,24 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   
   Then, on a new line, provide the final JSON data block enclosed in triple backticks (\`\`\`json ... \`\`\`).
   
-  **CRITICAL RULES FOR THE JSON BLOCK:**
+  **CRITICAL RULES FOR TIME LOGIC (MUST FOLLOW):**
+  1.  First, analyze the *entire* set of tasks to find the earliest start date and latest end date.
+  2.  Calculate the **Total Duration** of the project.
+  3.  Based on this *Total Duration*, you MUST select *one* interval type. **DO NOT** mix intervals.
+      * **< 3 Months:** Use "Weeks" (e.g., ["W1", "W2"])
+      * **3 Months to 1 Year:** Use "Months" (e.g., ["Jan 2026", "Feb 2026"])
+      * **1 Year to 3 Years:** Use "Quarters" (e.g., ["Q1 2026", "Q2 2026"])
+      * **3+ Years:** Use "Years" (e.g., ["2026", "2027", "2028"])
+  
+  **CRITICAL RULES FOR JSON OUTPUT:**
   1.  **DATA ONLY:** The JSON fields are for *data only*. **DO NOT** add any notes or commentary *inside* the JSON.
   2.  **NO INFERENCE:** For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text.
-  3.  **CONCISE TITLES:** Keep all titles under 150 characters.
+  3.  **MAXIMIZE DETAIL:** You MUST include *all* distinct tasks found in the research, even minor ones (e.g., pilots, testing).
   4.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
   5.  **MANDATORY BAR OBJECT:** If 'isSwimlane' is false, the 'bar' object MUST be included. If no dates are found, set 'startCol' and 'endCol' to 'null'.
-  6.  **MAXIMIZE DETAIL:** Your default bias must be to *include* all tasks found in the research. Do not omit tasks just because they seem like minor details. If it is a distinct task, include it.
-  
-  **TIME LOGIC:**
-  - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
-  - 2-12 months: Use "Months" (e.g., ["Jan 2026", "Feb 2026"])
-  - 1-3 years: Use "Quarters" (e.g., ["Q1 2026", "Q2 2026"])
-  - 3+ years: Use "Years" (e.g., ["2026", "2027"])
   
   **BAR LOGIC:**
-  - 'startCol' is the 1-based index of the column where the task begins.
+  - 'startCol' is the 1-based index of the column (from 'timeColumns') where the task begins.
   - 'endCol' is the 1-based index of the column where the task ends, PLUS ONE.
   - If no dates are found, set 'startCol' and 'endCol' to 'null'.
   - Assign colors logically ("blue", "ochre", "orange", "green").`;
@@ -84,7 +92,8 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     generationConfig: {
       maxOutputTokens: 8192,
       //
-      // <-- THE CRITICAL FIX: Set temperature to 0 for deterministic output.
+      // --- FIX FOR DETERMINISM (Part 2) ---
+      // Set temperature to 0 for 100% consistent outputs.
       //
       temperature: 0
     }
@@ -116,11 +125,9 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
           throw new Error('Invalid response from AI API');
         }
         
-        // <-- NEW PARSING LOGIC ---
         const fullResponseText = result.candidates[0].content.parts[0].text;
         
         // 1. Extract the JSON block using a regular expression
-        // This regex looks for ```json ... ``` and captures the content
         const jsonMatch = fullResponseText.match(/```json\n([\s\S]*?)\n```/);
         
         if (!jsonMatch || !jsonMatch[1]) {
@@ -132,7 +139,6 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         
         // 2. Parse the extracted text
         ganttData = JSON.parse(extractedJsonText);
-        // <-- END OF NEW PARSING LOGIC ---
         
         // If we got here, parsing succeeded
         break;
