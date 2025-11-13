@@ -660,7 +660,10 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
 function isDateInColumn(dateStr, colName, intervalType, dateType) {
   if (!dateStr || !colName) return false;
   
-  const parsedDate = parseDate(parsedDate);
+  // --- THIS IS THE FIX ---
+  const parsedDate = parseDate(dateStr);
+  // --- END OF FIX ---
+  
   if (!parsedDate) return false;
   
   const dYear = parsedDate.getFullYear();
