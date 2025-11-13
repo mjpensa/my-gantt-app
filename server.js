@@ -74,21 +74,22 @@ async function callGemini(payload, retryCount = 3) {
 async function extractFactSheet(userPrompt, researchText) {
   console.log("--- Calling AI: Extracting Fact Sheet ---");
 
-  // This prompt is correct and includes the critical "ENTITY MATCHING" rule
+  // --- FIX: Updated Rule #1 to be much stricter about what an "entity" is ---
   const factExtractionPrompt = `You are a data-extraction bot. Your job is to read the user's prompt and research files and extract a "Fact Sheet" containing all entities, tasks, and the project title.
   
   You MUST respond with *only* a JSON object matching the schema.
   
   **CRITICAL RULES:**
-  1.  **Extract Entities:** Identify all unique parent entities (e.g., "JPMorgan Chase", "Bank of America", "Citigroup", "Regulatory Drivers", "Industry Standards Development", "Goldman Sachs") and return them in the 'entities' array.
+  1.  **Extract Entities:** Identify all unique, high-level parent entities (e.g., "JPMorgan Chase", "Bank of America", "Regulatory Drivers", "Industry Standards Development"). An entity MUST be a primary actor or a major category of work. Do NOT extract tasks, sub-tasks, or random nouns as entities.
   2.  **Extract Tasks:** Extract *every* task, even minor ones (pilots, testing).
   2.5. **NO INFERENCE:** You MUST *only* extract tasks that are *explicitly stated* in the text (e.g., "JPM will launch...", "BofA is piloting...", "Task: ..."). Do NOT infer or create tasks based on assumptions, implications, or general statements (e.g., if the text says "ISDA documentation implies adoption", you must NOT create an "Adoption" task). Only extract factual, stated tasks, milestones, or deliverables.
   3.  **'taskName'**: MUST be a concise summary (under 100 chars) of the task, using keywords from the text.
-  4.  **'entity'**: MUST be the parent organization the task belongs to.
+  4.  **'entity'**: MUST be the parent organization the task belongs to (e.g., "JPMorgan Chase" or "Regulatory Drivers").
   4.5. **ENTITY MATCHING:** The 'entity' string in each task *must* be an *exact, case-sensitive match* to one of the strings you included in the 'entities' array.
   5.  **'startDate' / 'endDate'**: MUST be a year (e.g., "2024") or quarter (e.g., "Q1 2025") from the text. If unknown, use "null".
   6.  **Sanitize Strings:** You MUST properly escape all JSON-breaking characters (like " and \\n) within all string values.
   7.  **'projectTitle'**: Extract the main project title from the user prompt or research.`;
+  // --- END OF FIX ---
 
   const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
   
@@ -529,42 +530,32 @@ function buildGanttData(factSheet, requestedDates) {
   // Get the *actual* list of swimlanes from the AI's "Fact Sheet"
   const swimlanes = factSheet.entities || [];
   
+  // --- FIX: Reverted logic. We will now show ALL swimlanes returned by the AI. ---
   for (const entityName of swimlanes) {
     
-    // --- STEP 1: Find all tasks for this swimlane ---
+    // 1. Add the swimlane header *unconditionally*
+    ganttDataRows.push({
+      title: entityName,
+      isSwimlane: true,
+      entity: entityName // Add entity for frontend logic
+    });
+
+    // 2. Find all tasks for this swimlane
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
-    
-    // --- NEW FIX: STEP 2: Find tasks that *will actually be rendered* ---
-    const renderableTasks = [];
+
+    // 3. Add all tasks (the map function will filter out-of-range ones)
     for (const task of tasksForThisSwimlane) {
-      // Check if task falls in range. Color doesn't matter for this check.
-      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, "default"); 
-      if (bar.startCol !== null || bar.endCol !== null) {
-        renderableTasks.push({ task, bar }); // Store the task and its calculated bar
-      }
-    }
-
-    // --- NEW FIX: *Only if renderable tasks exist*, add the swimlane and its tasks ---
-    if (renderableTasks.length > 0) {
+      const color = swimlaneColors[entityName.trim()] || "default";
+      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
       
-      // 3. Add the swimlane header
-      ganttDataRows.push({
-        title: entityName,
-        isSwimlane: true,
-        entity: entityName // Add entity for frontend logic
-      });
-
-      // 4. Add all the (already-vetted) renderable tasks
-      for (const { task, bar } of renderableTasks) {
-        // Get the *correct* color now
-        bar.color = swimlaneColors[entityName.trim()] || "default";
-        
+      // Only add tasks that are *within* the chart's time range
+      if (bar.startCol !== null || bar.endCol !== null) {
         ganttDataRows.push({
           title: task.taskName,
           isSwimlane: false,
-          bar: bar, // Use the pre-calculated bar object
+          bar: bar,
           entity: entityName // Use the canonical entityName
         });
       }
@@ -669,7 +660,7 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
 function isDateInColumn(dateStr, colName, intervalType, dateType) {
   if (!dateStr || !colName) return false;
   
-  const parsedDate = parseDate(dateStr);
+  const parsedDate = parseDate(parsedDate);
   if (!parsedDate) return false;
   
   const dYear = parsedDate.getFullYear();
