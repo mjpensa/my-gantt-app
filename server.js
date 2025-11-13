@@ -74,7 +74,7 @@ async function callGemini(payload, retryCount = 3) {
 async function extractFactSheet(userPrompt, researchText) {
   console.log("--- Calling AI: Extracting Fact Sheet ---");
 
-  // The AI's *only* job is to extract facts. It does *not* build the chart.
+  // --- FIX #2: Add new "Rule 4.5" to enforce entity matching ---
   const factExtractionPrompt = `You are a data-extraction bot. Your job is to read the user's prompt and research files and extract a "Fact Sheet" containing all entities, tasks, and the project title.
   
   You MUST respond with *only* a JSON object matching the schema.
@@ -84,6 +84,7 @@ async function extractFactSheet(userPrompt, researchText) {
   2.  **Extract Tasks:** Extract *every* task, even minor ones (pilots, testing).
   3.  **'taskName'**: MUST be a concise summary (under 100 chars) of the task, using keywords from the text.
   4.  **'entity'**: MUST be the parent organization the task belongs to.
+  4.5. **ENTITY MATCHING:** The 'entity' string in each task *must* be an *exact, case-sensitive match* to one of the strings you included in the 'entities' array.
   5.  **'startDate' / 'endDate'**: MUST be a year (e.g., "2024") or quarter (e.g., "Q1 2025") from the text. If unknown, use "null".
   6.  **Sanitize Strings:** You MUST properly escape all JSON-breaking characters (like " and \\n) within all string values.
   7.  **'projectTitle'**: Extract the main project title from the user prompt or research.`;
@@ -166,6 +167,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     let requestedDates = { startDate: null, endDate: null };
     try {
       console.log("--- Analyzing User Prompt for Date Range ---");
+      // --- FIX #1: Pass the full researchTextCache for context ---
       requestedDates = await getRequestedDates(userPrompt, researchTextCache);
     } catch (e) {
       console.error("Could not parse requested dates, falling back to earliest.");
@@ -203,7 +205,7 @@ app.post('/get-task-analysis', async (req, res) => {
   1.  **NO INFERENCE:** For 'taskName', 'facts', and 'assumptions', you MUST use key phrases and data extracted *directly* from the provided text.
   2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
   3.  **DETERMINE STATUS:** Determine the task's 'status' ("completed", "in-progress", or "not-started") based on the current date (assume "November 2025") and the task's dates.
-  4.  **PROVIDE RATIONALE:** You MUST provide a 'rationALE' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
+  4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
   5.  **CLEAN STRINGS:** All string values MUST be valid JSON strings. You MUST properly escape any characters that would break JSON, such as double quotes (\") and newlines (\\n).`;
   
   const geminiUserQuery = `Research Content:\n${researchTextCache}\n\n**YOUR TASK:** Provide a full, detailed analysis for this specific task:
@@ -271,13 +273,14 @@ app.post('/get-task-analysis', async (req, res) => {
  * --- Helper to get the user's requested date range ---
  */
 async function getRequestedDates(userPrompt, researchText) {
-  const geminiSystemPrompt = `You are a date extraction bot. Analyze the user prompt. Extract the *explicitly requested* start and end date for the chart.
-  If the user asks for a "10-year plan from 2020", you must return { "startDate": "2020", "endDate": "2030" }.
+  const geminiSystemPrompt = `You are a date extraction bot. Analyze the user prompt AND the research content. Extract the *explicitly requested* start and end date for the chart.
+  For example, if the prompt or research title mentions "2020-2030", you must return { "startDate": "2020", "endDate": "2030" }.
   If the user says "a 2-year project starting Q1 2026", return { "startDate": "Q1 2026", "endDate": "Q4 2027" }.
   If no explicit range is requested, return { "startDate": null, "endDate": null }.
   You must respond *only* with the JSON object.`;
   
-  const geminiUserQuery = `User Prompt: "${userPrompt}"`; // Only analyze the prompt
+  // --- FIX #1: Pass the full research text as context ---
+  const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
 
   const schema = {
     type: "OBJECT",
@@ -402,17 +405,14 @@ function buildGanttData(factSheet, requestedDates) {
     });
     
     // 2. Find all tasks for this swimlane
-    //
-    // --- THIS IS THE FIX ---
-    // We now .trim() both strings to make the match robust
-    //
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
     
     // 3. Add all tasks
     for (const task of tasksForThisSwimlane) {
-      const color = swimlaneColors[task.entity] || "default";
+      // Use the entityName from the *loop* to get the color, not task.entity
+      const color = swimlaneColors[entityName.trim()] || "default";
       const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
       
       // Only add tasks that are *within* the chart's time range
@@ -421,7 +421,7 @@ function buildGanttData(factSheet, requestedDates) {
           title: task.taskName,
           isSwimlane: false,
           bar: bar,
-          entity: task.entity 
+          entity: entityName // Use the canonical entityName
         });
       }
     }
@@ -486,8 +486,6 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
   }
   
   if (startCol && !endCol && effectiveEndDate) {
-    // If it started, but didn't end (e.g., end date is "2030" but chart ends at "2026")
-    // Check if end date is after chart end
     const end = parseDate(effectiveEndDate);
     const chartEnd = parseDate(timeColumns[timeColumns.length - 1]);
     if(end && chartEnd && end > chartEnd) {
