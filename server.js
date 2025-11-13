@@ -3,8 +3,7 @@ import multer from 'multer';
 import mammoth from 'mammoth';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-// This is the fixed line (it now says 'from' instead of 'in')
-import { dirname, join } from 'path'; 
+import { dirname, join } from 'path';
 import 'dotenv/config';
 
 // --- Gemini API Configuration ---
@@ -30,6 +29,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   // 1. Extract text from uploaded files (Sort for determinism)
   try {
     if (req.files) {
+      // Sort files by name to ensure consistent researchText input
       const sortedFiles = req.files.sort((a, b) => a.originalname.localeCompare(b.originalname));
       for (const file of sortedFiles) {
         researchText += `\n\n--- Start of file: ${file.originalname} ---\n`;
@@ -47,136 +47,153 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     return res.status(500).json({ error: "Error processing uploaded files." });
   }
 
-  // 2. --- NEW "ANALYST" PROMPT (STEP 1) ---
-  // The AI's job is to fill a detailed "AnalysisSheet" for every task.
-  // It no longer builds the Gantt chart directly.
-  const geminiSystemPrompt = `You are a senior project management analyst. Your job is to analyze a user's prompt and research files to extract a detailed "AnalysisSheet" for every single task and swimlane.
-  
-  You MUST respond with *only* a valid JSON object matching the 'analysisSheetSchema'.
-  
-  **CRITICAL RULES FOR ANALYSIS:**
-  1.  **NO INFERENCE:** For 'taskName', 'facts', and 'assumptions', you MUST use key phrases and data extracted *directly* from the provided text.
-  2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
-  3.  **DETERMINE STATUS:** For each task, you must determine its 'status' ("completed", "in-progress", or "not-started") based on the current date and the task's dates.
-  4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
-  5.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text.
-  6.  **MAXIMIZE DETAIL:** You MUST include *all* distinct tasks found in the research (pilots, testing, etc.).
-  7.  **ENTITY:** The 'entity' MUST be the parent organization (e.g., "JPMorgan Chase", "Regulatory Drivers").
-  
-  **DATE LOGIC:**
-  - 'startDate' and 'endDate' MUST be a year (e.g., "2024") or quarter (e.g., "Q1 2025") from the text.
-  - If a date is unknown, use "null".
-  - If a task is ongoing with no end date, set 'endDate' to the end of the project's timeframe (e.g., "2030").`;
+  // 2. --- "MAPREDUCE" ARCHITECTURE: "MAP" STEP (AI) ---
+  // We make multiple small, simple API calls instead of one large, complex one.
 
-  const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
-  
-  // 3. --- NEW, RICHER JSON SCHEMA ---
-  const analysisSheetSchema = {
-    type: "OBJECT",
-    properties: {
-      projectTitle: { type: "STRING" },
-      tasks: {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            taskName: { type: "STRING" },
-            isSwimlane: { type: "BOOLEAN" },
-            entity: { type: "STRING" }, // e.g., "JPMorgan Chase"
-            startDate: { type: "STRING" }, // e.g., "2024" or "Q1 2025" or "null"
-            endDate: { type: "STRING" },
-            status: { type: "STRING", enum: ["completed", "in-progress", "not-started", "n/a"] },
-            facts: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: { fact: { type: "STRING" }, source: { type: "STRING" } }
-              }
-            },
-            assumptions: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: { assumption: { type: "STRING" }, source: { type: "STRING" } }
-              }
-            },
-            rationale: { type: "STRING" }, // For 'in-progress' or 'not-started'
-            summary: { type: "STRING" } // For 'completed'
-          },
-          required: ["taskName", "isSwimlane", "entity", "status"]
-        }
-      }
-    },
-    required: ["projectTitle", "tasks"]
-  };
+  // This is our deterministic structure. The AI will fill in the tasks for each.
+  const swimlaneDefinitions = [
+    { entityName: "Regulatory Drivers", color: "orange" }, // Using 'orange' for 'red'
+    { entityName: "Industry Standards Development", color: "green" },
+    { entityName: "JPMorgan Chase", color: "blue" },
+    { entityName: "Bank of America", color: "blue" },
+    { entityName: "Citigroup", color: "blue" },
+    { entityName: "Goldman Sachs", color: "blue" }
+  ];
 
-  // 4. --- NEW 'generationConfig' ---
-  // We lock the AI into its most deterministic mode.
-  const payload = {
-    contents: [{ parts: [{ text: geminiUserQuery }] }],
-    systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: analysisSheetSchema,
-      maxOutputTokens: 8192,
-      temperature: 0,
-      topP: 1,
-      topK: 1
-    }
-  };
+  let allTasks = []; // We will collect all tasks from all AI calls here
+  let projectTitle = "Project Roadmap"; // Default title
 
-  // 5. Call the Gemini API
   try {
-    let analysisSheet = null;
-    let lastError = null;
-    
-    // Retry logic (same as before)
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+    for (const swimlane of swimlaneDefinitions) {
+      const { entityName, color } = swimlane;
+      
+      console.log(`--- Analyzing entity: ${entityName} ---`);
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API call failed with status: ${response.status} - ${errorText}`);
-        }
+      // 3. Build the "Map" prompt for the Gemini API
+      const geminiSystemPrompt = `You are a data extraction bot. Your job is to analyze a user's prompt and research files to extract a detailed "AnalysisSheet" *only* for a specific entity.
+      
+      You MUST respond with *only* a valid JSON object matching the 'analysisSheetSchema'.
+      
+      **CRITICAL RULES FOR ANALYSIS:**
+      1.  **NO INFERENCE:** For 'taskName', 'facts', and 'assumptions', you MUST use key phrases and data extracted *directly* from the provided text.
+      2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
+      3.  **DETERMINE STATUS:** For each task, you must determine its 'status' ("completed", "in-progress", or "not-started") based on the current date and the task's dates.
+      4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
+      5.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text.
+      6.  **MAXIMIZE DETAIL:** You MUST include *all* distinct tasks found in the research (pilots, testing, etc.) that match the target entity.
+      
+      **DATE LOGIC:**
+      - 'startDate' and 'endDate' MUST be a year (e.g., "2024") or quarter (e.g., "Q1 2025") from the text.
+      - If a date is unknown, use "null".
+      - If a task is ongoing, set 'endDate' to the end of the project's timeframe (e.g., "2030").`;
 
-        const result = await response.json();
-        
-        if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
-          console.error('Invalid API response:', JSON.stringify(result));
-          throw new Error('Invalid response from AI API');
+      const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}\n\n**YOUR TASK:** Extract all tasks, facts, and analysis for the entity: "${entityName}"`;
+
+      // 4. Define the strict JSON output schema
+      const analysisSheetSchema = {
+        type: "OBJECT",
+        properties: {
+          // We ask for the project title in each call; we'll use the last one
+          projectTitle: { type: "STRING" }, 
+          tasks: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                taskName: { type: "STRING" },
+                startDate: { type: "STRING" },
+                endDate: { type: "STRING" },
+                status: { type: "STRING", enum: ["completed", "in-progress", "not-started", "n/a"] },
+                facts: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: { fact: { type: "STRING" }, source: { type: "STRING" } }
+                  }
+                },
+                assumptions: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: { assumption: { type: "STRING" }, source: { type: "STRING" } }
+                  }
+                },
+                rationale: { type: "STRING" },
+                summary: { type: "STRING" }
+              },
+              required: ["taskName", "status"]
+            }
+          }
+        },
+        required: ["projectTitle", "tasks"]
+      };
+
+      // 5. Define the payload for this single "Map" call
+      const payload = {
+        contents: [{ parts: [{ text: geminiUserQuery }] }],
+        systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: analysisSheetSchema,
+          maxOutputTokens: 8192, // 8k is fine for this smaller, scoped task
+          temperature: 0,
+          topP: 1,
+          topK: 1
         }
-        
-        const extractedJsonText = result.candidates[0].content.parts[0].text;
-        analysisSheet = JSON.parse(extractedJsonText);
-        
-        break; // Success!
-        
-      } catch (parseError) {
-        lastError = parseError;
-        console.log(`Attempt ${attempt + 1} failed:`, parseError.message);
-        if (attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      };
+
+      // 6. Call the Gemini API (with retry)
+      let partialAnalysisSheet = null;
+      let lastError = null;
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`API call failed for ${entityName} with status: ${response.status} - ${errorText}`);
+          }
+          const result = await response.json();
+          if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+            throw new Error(`Invalid response from AI API for ${entityName}`);
+          }
+          const extractedJsonText = result.candidates[0].content.parts[0].text;
+          partialAnalysisSheet = JSON.parse(extractedJsonText);
+          break; // Success
+        } catch (parseError) {
+          lastError = parseError;
+          console.log(`Attempt ${attempt + 1} failed for ${entityName}:`, parseError.message);
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
         }
       }
-    }
-    
-    if (!analysisSheet || !analysisSheet.tasks) {
-      console.error("Invalid analysis sheet structure:", analysisSheet);
-      throw lastError || new Error('AI failed to extract a valid analysis sheet after 3 attempts');
-    }
-    
-    // 6. --- NEW "BUILDER" LOGIC (STEP 2) ---
-    // Our server code now deterministically builds the frontend data
-    // from the AI's "AnalysisSheet".
+      
+      if (!partialAnalysisSheet) {
+        throw lastError || new Error(`AI failed to extract data for ${entityName} after 3 attempts`);
+      }
+
+      // 7. --- "REDUCE" STEP (Collect tasks) ---
+      // Add the entity and color back into the tasks
+      for (const task of partialAnalysisSheet.tasks) {
+        allTasks.push({
+          ...task,
+          entity: entityName, // Add the entity
+          color: color,       // Add the color
+          isSwimlane: false   // Mark as a task
+        });
+      }
+      projectTitle = partialAnalysisSheet.projectTitle; // Update title
+    } // End of swimlane loop
+
+    // 8. --- "BUILDER" LOGIC (STEP 2) ---
+    // Now we (the server) build the final data objects deterministically
     //
-    const { ganttData, analysisTableData } = buildFrontendData(analysisSheet);
+    const { ganttData, analysisTableData } = buildFrontendData(allTasks, swimlaneDefinitions, projectTitle);
     
-    // 7. Send *both* data objects back to the frontend
+    // 9. Send *both* data objects back to the frontend
     res.json({
       ganttData: ganttData,
       analysisTableData: analysisTableData
@@ -202,23 +219,11 @@ app.listen(port, () => {
  * Builds the final Gantt chart and Analysis table data
  * from the AI's "AnalysisSheet".
  */
-function buildFrontendData(analysisSheet) {
+function buildFrontendData(allTasks, swimlaneDefinitions, projectTitle) {
   
-  // --- 1. Define the Deterministic Structure ---
-  // This is our "contract." The structure is *always* this.
-  const swimlaneDefinitions = [
-    { entityName: "Regulatory Drivers", color: "orange" }, // Using 'orange' for 'red'
-    { entityName: "Industry Standards Development", color: "green" },
-    { entityName: "JPMorgan Chase", color: "blue" },
-    { entityName: "Bank of America", color: "blue" },
-    { entityName: "Citigroup", color: "blue" },
-    { entityName: "Goldman Sachs", color: "blue" }
-    // We can add more known entities here
-  ];
-
-  // --- 2. Determine Time Scale (Deterministically) ---
+  // --- 1. Determine Time Scale (Deterministically) ---
   let allDates = [];
-  analysisSheet.tasks.forEach(task => {
+  allTasks.forEach(task => {
     if (task.startDate) allDates.push(parseDate(task.startDate));
     if (task.endDate) allDates.push(parseDate(task.endDate));
   });
@@ -258,7 +263,7 @@ function buildFrontendData(analysisSheet) {
     for(let y = startYear; y <= endYear; y++) timeColumns.push(y.toString());
   }
   
-  // --- 3. Build the Final 'ganttData' and 'analysisTableData' Arrays ---
+  // --- 2. Build the Final 'ganttData' and 'analysisTableData' Arrays ---
   const ganttDataRows = [];
   const analysisTableRows = [];
   
@@ -270,13 +275,13 @@ function buildFrontendData(analysisSheet) {
     });
     
     // 2. Find all facts (tasks) for this swimlane
-    const tasksForThisSwimlane = analysisSheet.tasks.filter(
+    const tasksForThisSwimlane = allTasks.filter(
       task => !task.isSwimlane && task.entity === swimlane.entityName
     );
     
     // 3. Add all tasks
     for (const task of tasksForThisSwimlane) {
-      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, swimlane.color);
+      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, task.color);
       
       // Add to Gantt Data
       ganttDataRows.push({
@@ -302,7 +307,7 @@ function buildFrontendData(analysisSheet) {
   // 4. Return both objects
   return {
     ganttData: {
-      title: analysisSheet.projectTitle,
+      title: projectTitle,
       timeColumns: timeColumns,
       data: ganttDataRows
     },
