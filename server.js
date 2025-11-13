@@ -47,13 +47,13 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   //
-  // <-- UPDATED PROMPT: Now asks for "thoughts" *then* the JSON block.
+  // <-- FIXED SYNTAX ERROR: Escaped the triple backticks ``` -> \`\`\`
   //
   const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart.
   
   First, write a brief summary of your analysis (your thought process).
   
-  Then, on a new line, provide the final JSON data block enclosed in triple backticks (```json ... ```).
+  Then, on a new line, provide the final JSON data block enclosed in triple backticks (\`\`\`json ... \`\`\`).
   
   **CRITICAL RULES FOR THE JSON BLOCK:**
   1.  **DATA ONLY:** The JSON fields are for *data only*. **DO NOT** add any notes or commentary *inside* the JSON.
@@ -77,9 +77,6 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
   
   // 3. Define the payload
-  //
-  // <-- UPDATED PAYLOAD: Removed 'responseSchema' and 'responseMimeType: "application/json"'.
-  //
   const payload = {
     contents: [{ parts: [{ text: geminiUserQuery }] }],
     systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
@@ -115,12 +112,11 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
           throw new Error('Invalid response from AI API');
         }
         
-        //
         // <-- NEW PARSING LOGIC ---
-        //
         const fullResponseText = result.candidates[0].content.parts[0].text;
         
         // 1. Extract the JSON block using a regular expression
+        // This regex looks for ```json ... ``` and captures the content
         const jsonMatch = fullResponseText.match(/```json\n([\s\S]*?)\n```/);
         
         if (!jsonMatch || !jsonMatch[1]) {
@@ -132,9 +128,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         
         // 2. Parse the extracted text
         ganttData = JSON.parse(extractedJsonText);
-        //
         // <-- END OF NEW PARSING LOGIC ---
-        //
         
         // If we got here, parsing succeeded
         break;
