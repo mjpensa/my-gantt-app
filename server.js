@@ -214,7 +214,7 @@ app.post('/get-task-analysis', async (req, res) => {
   **CRITICAL RULES FOR ANALYSIS:**
   1.  **NO INFERENCE:** For 'taskName', 'facts', and 'assumptions', you MUST use key phrases and data extracted *directly* from the provided text.
   2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
-  3.  **DETERMINE STATUS:** Determine the task's 'status' ("completed", "in-progress", or "not-started") based on the current date and the task's dates.
+  3.  **DETERMINE STATUS:** Determine the task's 'status' ("completed", "in-progress", or "not-started") based on the current date (assume "November 2025") and the task's dates.
   4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
   5.  **CLEAN STRINGS:** All string values MUST be sanitized (no newlines, tabs, or double quotes).`;
   
@@ -292,6 +292,17 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
   });
   
   const validDates = allDates.filter(Boolean);
+  // Handle case with no valid dates
+  if (validDates.length === 0) {
+    // Default to a 1-year, 4-quarter chart
+    const startYear = new Date().getFullYear();
+    return {
+      title: projectTitle,
+      timeColumns: [`Q1 ${startYear}`, `Q2 ${startYear}`, `Q3 ${startYear}`, `Q4 ${startYear}`],
+      data: []
+    };
+  }
+  
   const minDate = new Date(Math.min.apply(null, validDates));
   const maxDate = new Date(Math.max.apply(null, validDates));
   
@@ -316,6 +327,8 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
   } else if (totalMonths <= 36) {
     intervalType = "Quarters";
     let d = new Date(minDate);
+    // Align to start of quarter
+    d.setMonth(Math.floor(d.getMonth() / 3) * 3);
     while(d <= maxDate) {
       timeColumns.push(`Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}`);
       d.setMonth(d.getMonth() + 3);
@@ -375,7 +388,15 @@ function parseDate(dateStr) {
   if (dateStr.match(/^\d{4}$/)) { // "2024"
     return new Date(dateStr, 0, 1);
   }
-  return new Date(dateStr);
+  // Try parsing month-year
+  const monthYear = dateStr.match(/(\w{3}) (\d{4})/);
+  if (monthYear) {
+    try {
+      return new Date(dateStr);
+    } catch(e) { return null; }
+  }
+  
+  return null; // Return null if format is unrecognized
 }
 
 /**
@@ -405,6 +426,7 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
   }
   
   if (startCol && !endCol) {
+    // If it started but didn't end, it must run off the chart
     endCol = timeColumns.length + 1;
   }
   
@@ -425,23 +447,38 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
 function isDateInColumn(dateStr, colName, intervalType) {
   if (!dateStr || !colName) return false;
   
-  const dateYearMatch = dateStr.match(/\d{4}/);
-  if (!dateYearMatch) return false;
-  const year = dateYearMatch[0];
+  const parsedDate = parseDate(dateStr);
+  if (!parsedDate) return false;
+  
+  const colDate = parseDate(colName);
+  if (!colDate) return false;
   
   if (intervalType === "Years") {
-    return dateStr.includes(colName);
+    return parsedDate.getFullYear() === colDate.getFullYear();
   }
   if (intervalType === "Quarters") {
-    const colYear = colName.split(' ')[1];
-    const colQuarter = colName.split(' ')[0];
+    const dYear = parsedDate.getFullYear();
+    const cYear = colDate.getFullYear();
+    const dQuarter = Math.floor(parsedDate.getMonth() / 3);
+    const cQuarter = Math.floor(colDate.getMonth() / 3);
     
-    const dateQuarterMatch = dateStr.match(/Q(\d)/);
-    if (dateQuarterMatch) {
-      return dateStr === colName;
-    } else {
-      return year === colYear;
+    // Handle "2024" matching "Q1 2024"
+    if (dateStr.match(/^\d{4}$/)) {
+      return dYear === cYear;
     }
+    // Handle "Q1 2024" matching "Q1 2024"
+    return dYear === cYear && dQuarter === cQuarter;
   }
-  return dateStr.includes(colName);
+  if (intervalType === "Months") {
+    return parsedDate.getFullYear() === colDate.getFullYear() &&
+           parsedDate.getMonth() === colDate.getMonth();
+  }
+  
+  return false; // Default for Weeks or unknown
 }
+
+// --- THIS IS THE MISSING PIECE ---
+// This line actually starts the server.
+app.listen(port, () => {
+  console.log(`Server running at http://localhost:${port}`);
+});
