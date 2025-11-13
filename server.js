@@ -360,6 +360,7 @@ function buildGanttData(factSheet, requestedDates) {
   }
   
   const totalMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
+  const totalYears = totalMonths / 12; // Get total years for the new rule
   
   let timeColumns = [];
   let intervalType = "Years";
@@ -375,7 +376,7 @@ function buildGanttData(factSheet, requestedDates) {
       timeColumns.push(d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear());
       d.setMonth(d.getMonth() + 1);
     }
-  } else if (totalMonths <= 36) {
+  } else if (totalMonths <= 36) { // 1-3 years
     intervalType = "Quarters";
     let d = new Date(minDate);
     d.setMonth(Math.floor(d.getMonth() / 3) * 3);
@@ -383,11 +384,23 @@ function buildGanttData(factSheet, requestedDates) {
       timeColumns.push(`Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}`);
       d.setMonth(d.getMonth() + 3);
     }
-  } else {
+  } else if (totalYears <= 15) { // 3-15 years
     intervalType = "Years";
     const startYear = minDate.getFullYear();
     const endYear = maxDate.getFullYear();
     for(let y = startYear; y <= endYear; y++) timeColumns.push(y.toString());
+  } else {
+    // --- NEW LOGIC: > 15 years ---
+    intervalType = "5-Year Intervals";
+    let startYear = minDate.getFullYear();
+    // Round down to the nearest 5-year mark (e.g., 1999 -> 1995, 2000 -> 2000)
+    startYear = Math.floor(startYear / 5) * 5; 
+    const endYear = maxDate.getFullYear();
+    
+    for(let y = startYear; y <= endYear; y += 5) {
+      // Create labels like "2000-2004"
+      timeColumns.push(`${y}-${y + 4}`);
+    }
   }
   
   // 3. Build the Final 'ganttData'
@@ -398,7 +411,6 @@ function buildGanttData(factSheet, requestedDates) {
   
   for (const entityName of swimlanes) {
     
-    // --- THIS IS THE FIX ---
     // 1. *First*, find all tasks for this swimlane
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
@@ -534,10 +546,20 @@ function isDateInColumn(dateStr, colName, intervalType, dateType) {
   const parsedDate = parseDate(dateStr);
   if (!parsedDate) return false;
   
+  const dYear = parsedDate.getFullYear();
+  
+  // --- NEW LOGIC for 5-Year Intervals ---
+  if (intervalType === "5-Year Intervals") {
+    // colName is "2000-2004"
+    const [colStart, colEnd] = colName.split('-').map(Number);
+    // dYear is the parsed year of the task's date
+    return dYear >= colStart && dYear <= colEnd;
+  }
+  // --- END NEW LOGIC ---
+
   const colDate = parseDate(colName);
   if (!colDate) return false;
 
-  const dYear = parsedDate.getFullYear();
   const cYear = colDate.getFullYear();
   
   if (intervalType === "Years") {
