@@ -4,7 +4,12 @@
  */
 async function showAnalysisModal(taskIdentifier) {
   // 1. Remove any old modal
-  document.getElementById('analysis-modal')?.remove();
+  // --- FIX: Replaced optional chaining (?.) with a standard 'if' check ---
+  const oldModal = document.getElementById('analysis-modal');
+  if (oldModal) {
+    oldModal.remove();
+  }
+  // --- END FIX ---
 
   // --- NEW: Keep chat history in scope ---
   let chatHistory = [];
