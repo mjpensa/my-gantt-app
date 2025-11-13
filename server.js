@@ -92,10 +92,12 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     generationConfig: {
       maxOutputTokens: 8192,
       //
-      // --- FIX FOR DETERMINISM (Part 2) ---
-      // Set temperature to 0 for 100% consistent outputs.
+      // --- FIX FOR 100% DETERMINISM ---
+      // This combination locks the AI into a single, repeatable output path.
       //
-      temperature: 0
+      temperature: 0,
+      topP: 1,
+      topK: 1
     }
   };
 
