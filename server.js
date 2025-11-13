@@ -530,32 +530,44 @@ function buildGanttData(factSheet, requestedDates) {
   // Get the *actual* list of swimlanes from the AI's "Fact Sheet"
   const swimlanes = factSheet.entities || [];
   
-  // --- FIX: Reverted logic. We will now show ALL swimlanes returned by the AI. ---
+  // --- THIS IS THE FINAL FIX ---
+  // Loop through each entity the AI found
   for (const entityName of swimlanes) {
     
-    // 1. Add the swimlane header *unconditionally*
-    ganttDataRows.push({
-      title: entityName,
-      isSwimlane: true,
-      entity: entityName // Add entity for frontend logic
-    });
-
-    // 2. Find all tasks for this swimlane
+    // 1. Find all tasks for this swimlane
     const tasksForThisSwimlane = allTasks.filter(
       task => task.entity && entityName && task.entity.trim() === entityName.trim()
     );
-
-    // 3. Add all tasks (the map function will filter out-of-range ones)
+    
+    // 2. Find which of those tasks will *actually appear* on the chart
+    const renderableTasks = [];
     for (const task of tasksForThisSwimlane) {
-      const color = swimlaneColors[entityName.trim()] || "default";
-      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, color);
-      
-      // Only add tasks that are *within* the chart's time range
+      // Check if task falls in range. Color doesn't matter for this check.
+      const bar = mapDatesToColumns(task.startDate, task.endDate, timeColumns, intervalType, "default"); 
       if (bar.startCol !== null || bar.endCol !== null) {
+        renderableTasks.push({ task, bar }); // Store the task and its calculated bar
+      }
+    }
+
+    // 3. *Only if renderable tasks exist*, add the swimlane and its tasks
+    if (renderableTasks.length > 0) {
+      
+      // Add the swimlane header
+      ganttDataRows.push({
+        title: entityName,
+        isSwimlane: true,
+        entity: entityName // Add entity for frontend logic
+      });
+
+      // Add all the (already-vetted) renderable tasks
+      for (const { task, bar } of renderableTasks) {
+        // Get the *correct* color now
+        bar.color = swimlaneColors[entityName.trim()] || "default";
+        
         ganttDataRows.push({
           title: task.taskName,
           isSwimlane: false,
-          bar: bar,
+          bar: bar, // Use the pre-calculated bar object
           entity: entityName // Use the canonical entityName
         });
       }
