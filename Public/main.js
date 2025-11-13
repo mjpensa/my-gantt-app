@@ -37,11 +37,10 @@ async function handleChartGenerate(event) {
   chartOutput.innerHTML = ''; // Clear old chart
 
   try {
-    // 3. Call the backend API
+    // 3. Call the backend API (for the *initial* chart)
     const response = await fetch('/generate-chart', {
       method: 'POST',
       body: formData,
-      // No 'Content-Type' header, browser sets it for FormData
     });
 
     if (!response.ok) {
@@ -50,14 +49,15 @@ async function handleChartGenerate(event) {
     }
 
     // 4. Get the JSON data from the server
+    // *** FIX: The server sends the object *directly* now. ***
     const ganttData = await response.json();
 
-    // 4.5. Validate the data structure
+    // 5. Validate the data structure
     if (!ganttData || !ganttData.timeColumns || !ganttData.data) {
       throw new Error('Invalid chart data received from server');
     }
 
-    // 5. Render the chart
+    // 6. Render the chart
     setupChart(ganttData);
 
   } catch (error) {
@@ -65,7 +65,7 @@ async function handleChartGenerate(event) {
     errorMessage.textContent = `Error: ${error.message}`;
     errorMessage.style.display = 'block';
   } finally {
-    // 6. Restore UI
+    // 7. Restore UI
     generateBtn.disabled = false;
     loadingIndicator.style.display = 'none';
   }
@@ -100,18 +100,15 @@ function setupChart(ganttData) {
   const gridEl = document.createElement('div');
   gridEl.className = 'gantt-grid';
   
-  // --- Dynamic Grid Columns (Objective 1 & 4) ---
+  // --- Dynamic Grid Columns ---
   const numCols = ganttData.timeColumns.length;
-  // Set the CSS Grid layout dynamically
   gridEl.style.gridTemplateColumns = `minmax(220px, 1.5fr) repeat(${numCols}, 1fr)`;
 
-  // --- Create Header Row (from data) ---
-  // Add empty top-left cell
+  // --- Create Header Row ---
   const headerLabel = document.createElement('div');
   headerLabel.className = 'gantt-header gantt-header-label';
   gridEl.appendChild(headerLabel);
   
-  // Add time column headers (from data)
   for (const colName of ganttData.timeColumns) {
     const headerCell = document.createElement('div');
     headerCell.className = 'gantt-header';
@@ -119,7 +116,7 @@ function setupChart(ganttData) {
     gridEl.appendChild(headerCell);
   }
 
-  // --- Create Data Rows (from data) (Objective 2 & 3) ---
+  // --- Create Data Rows ---
   for (const row of ganttData.data) {
     const isSwimlane = row.isSwimlane;
     
@@ -129,7 +126,7 @@ function setupChart(ganttData) {
     labelEl.textContent = row.title;
     gridEl.appendChild(labelEl);
     
-    // 2. Create Bar Area (this spans all time columns)
+    // 2. Create Bar Area
     const barAreaEl = document.createElement('div');
     barAreaEl.className = `gantt-bar-area ${isSwimlane ? 'swimlane' : 'task'}`;
     barAreaEl.style.gridColumn = `2 / span ${numCols}`;
@@ -143,20 +140,23 @@ function setupChart(ganttData) {
     }
 
     // 3. Add the bar (if it's a task and has bar data)
-    //
-    // <-- UPDATED LOGIC: Check for bar and non-null startCol
-    //
     if (!isSwimlane && row.bar && row.bar.startCol != null) {
       const bar = row.bar;
       
       const barEl = document.createElement('div');
       barEl.className = 'gantt-bar';
       barEl.setAttribute('data-color', bar.color || 'default');
-      
-      // Position the bar using grid-column (from data)
       barEl.style.gridColumn = `${bar.startCol} / ${bar.endCol}`;
       
       barAreaEl.appendChild(barEl);
+
+      // --- NEW: Add click listener for analysis ---
+      // We make both the label and the bar area clickable
+      const taskIdentifier = { taskName: row.title, entity: row.entity };
+      labelEl.addEventListener('click', () => showAnalysisModal(taskIdentifier));
+      barAreaEl.addEventListener('click', () => showAnalysisModal(taskIdentifier));
+      labelEl.style.cursor = 'pointer';
+      barAreaEl.style.cursor = 'pointer';
     }
     
     gridEl.appendChild(barAreaEl);
@@ -177,7 +177,7 @@ function setupChart(ganttData) {
   container.appendChild(chartWrapper);
   container.appendChild(exportContainer);
 
-  // --- Add Export Functionality ---
+  // Add Export Functionality
   addExportListener();
 }
 
@@ -187,7 +187,6 @@ function setupChart(ganttData) {
  */
 function addExportListener() {
   const exportBtn = document.getElementById('export-png-btn');
-  // We capture the wrapper, which includes the title
   const chartContainer = document.getElementById('gantt-chart-container');
 
   if (!exportBtn || !chartContainer) {
@@ -199,11 +198,10 @@ function addExportListener() {
     exportBtn.textContent = 'Exporting...';
     exportBtn.disabled = true;
 
-    // Use html2canvas (which is loaded in index.html)
     html2canvas(chartContainer, { 
       useCORS: true,
       logging: false,
-      scale: 2 // Render at 2x resolution for better quality
+      scale: 2 // Render at 2x resolution
     }).then(canvas => {
       const link = document.createElement('a');
       link.download = 'gantt-chart.png';
@@ -219,4 +217,109 @@ function addExportListener() {
       alert("Error exporting chart. See console for details.");
     });
   });
+}
+
+// -------------------------------------------------------------------
+// --- NEW: "ON-DEMAND" ANALYSIS MODAL ---
+// -------------------------------------------------------------------
+
+/**
+ * Creates and shows the analysis modal.
+ * Fetches data from the new /get-task-analysis endpoint.
+ */
+async function showAnalysisModal(taskIdentifier) {
+  // 1. Remove any old modal
+  document.getElementById('analysis-modal')?.remove();
+
+  // 2. Create modal structure
+  const modalOverlay = document.createElement('div');
+  modalOverlay.id = 'analysis-modal';
+  modalOverlay.className = 'modal-overlay';
+  
+  const modalContent = document.createElement('div');
+  modalContent.className = 'modal-content';
+  
+  modalContent.innerHTML = `
+    <div class="modal-header">
+      <h3 class="modal-title">Analyzing...</h3>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body-content">
+      <div class="modal-spinner"></div>
+    </div>
+  `;
+  
+  modalOverlay.appendChild(modalContent);
+  document.body.appendChild(modalOverlay);
+
+  // 3. Add close listeners
+  modalOverlay.addEventListener('click', (e) => {
+    if (e.target === modalOverlay) {
+      modalOverlay.remove();
+    }
+  });
+  document.getElementById('modal-close-btn').addEventListener('click', () => {
+    modalOverlay.remove();
+  });
+
+  // 4. Fetch the analysis data
+  try {
+    const response = await fetch('/get-task-analysis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(taskIdentifier)
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || "Server error");
+    }
+
+    const analysis = await response.json();
+
+    // 5. Populate the modal with the analysis
+    document.querySelector('.modal-title').textContent = analysis.taskName;
+    document.getElementById('modal-body-content').innerHTML = `
+      ${buildAnalysisSection('Status', `<span class="status-pill status-${analysis.status.replace(/\s+/g, '-').toLowerCase()}">${analysis.status}</span>`)}
+      ${buildAnalysisSection('Dates', `${analysis.startDate || 'N/A'} to ${analysis.endDate || 'N/A'}`)}
+      ${buildAnalysisList('Facts', analysis.facts, 'fact', 'source')}
+      ${buildAnalysisList('Assumptions', analysis.assumptions, 'assumption', 'source')}
+      ${buildAnalysisSection('Summary', analysis.summary)}
+      ${buildAnalysisSection('Rationale / Hurdles', analysis.rationale)}
+    `;
+
+  } catch (error) {
+    console.error("Error fetching analysis:", error);
+    document.getElementById('modal-body-content').innerHTML = `<div class="modal-error">Failed to load analysis: ${error.message}</div>`;
+  }
+}
+
+// Helper function to build a section of the modal
+function buildAnalysisSection(title, content) {
+  if (!content) return ''; // Don't show empty sections
+  return `
+    <div class="analysis-section">
+      <h4>${title}</h4>
+      <p>${content}</p>
+    </div>
+  `;
+}
+
+// Helper function to build a list of facts/assumptions
+function buildAnalysisList(title, items, itemKey, sourceKey) {
+  if (!items || items.length === 0) return '';
+  
+  const listItems = items.map(item => 
+    `<li>
+      <p>${item[itemKey]}</p>
+      <span class="source">(Source: ${item[sourceKey]})</span>
+    </li>`
+  ).join('');
+  
+  return `
+    <div class="analysis-section">
+      <h4>${title}</h4>
+      <ul class="analysis-list">${listItems}</ul>
+    </div>
+  `;
 }

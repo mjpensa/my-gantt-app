@@ -18,7 +18,8 @@ const __dirname = dirname(__filename);
 
 // --- Middleware ---
 app.use(express.json());
-app.use(express.static(join(__dirname, 'Public'))); // Serve our HTML, CSS, JS
+// *** FIX: Use 'Public' (uppercase) to match your folder structure ***
+app.use(express.static(join(__dirname, 'Public'))); 
 const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
 
 // --- Global variable to cache research text ---
@@ -165,29 +166,29 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
         }
       };
 
-      // 6. Call the API (no retry, it's inside a larger loop)
+      // 6. Call the API
       const partialData = await callGemini(payload);
 
       // 7. "Reduce" Step: Collect the tasks
-      for (const task of partialData.tasks) {
-        allTasks.push({
-          ...task,
-          entity: entityName,
-          color: color,
-          isSwimlane: false
-        });
+      if (partialData && partialData.tasks) {
+        for (const task of partialData.tasks) {
+          allTasks.push({
+            ...task,
+            entity: entityName,
+            color: color,
+            isSwimlane: false
+          });
+        }
+        projectTitle = partialData.projectTitle; // Use the latest title
       }
-      projectTitle = partialData.projectTitle; // Use the latest title
     } // End of swimlane loop
 
     // 8. "Builder" Step: Server builds the final Gantt data
     const ganttData = buildGanttData(allTasks, swimlaneDefinitions, projectTitle);
     
     // 9. Send *only* the Gantt data to the frontend
-    res.json({
-      ganttData: ganttData
-      // We are *not* sending analysisTableData anymore
-    });
+    // *** FIX: Send the ganttData object *directly* ***
+    res.json(ganttData);
 
   } catch (e) {
     console.error("API call error:", e);
@@ -299,7 +300,7 @@ function buildGanttData(allTasks, swimlaneDefinitions, projectTitle) {
     return {
       title: projectTitle,
       timeColumns: [`Q1 ${startYear}`, `Q2 ${startYear}`, `Q3 ${startYear}`, `Q4 ${startYear}`],
-      data: []
+      data: [] // No data to show
     };
   }
   
@@ -430,6 +431,7 @@ function mapDatesToColumns(startDate, endDate, timeColumns, intervalType, color)
     endCol = timeColumns.length + 1;
   }
   
+  // Handle tasks that are just a single point in time (e.g., in "2024")
   if (startCol && !endCol && startDate === effectiveEndDate) {
     endCol = startCol + 1;
   }
