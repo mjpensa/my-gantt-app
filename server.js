@@ -47,7 +47,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   //
-  // <-- FIXED SYNTAX ERROR: Escaped the triple backticks ``` -> \`\`\`
+  // <-- UPDATED PROMPT: Added new rule 6 for MAXIMIZE DETAIL.
   //
   const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart.
   
@@ -61,6 +61,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   3.  **CONCISE TITLES:** Keep all titles under 150 characters.
   4.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
   5.  **MANDATORY BAR OBJECT:** If 'isSwimlane' is false, the 'bar' object MUST be included. If no dates are found, set 'startCol' and 'endCol' to 'null'.
+  6.  **MAXIMIZE DETAIL:** Your default bias must be to *include* all tasks found in the research. Do not omit tasks just because they seem like minor details. If it is a distinct task, include it.
   
   **TIME LOGIC:**
   - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
@@ -82,7 +83,10 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
     generationConfig: {
       maxOutputTokens: 8192,
-      temperature: 0.2
+      //
+      // <-- THE CRITICAL FIX: Set temperature to 0 for deterministic output.
+      //
+      temperature: 0
     }
   };
 
@@ -149,7 +153,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     // Validate ganttData structure
     if (!ganttData.timeColumns || !ganttData.data) {
       console.error('Invalid gantt data structure:', ganttData);
-      throw new Error('AI returned incomplete chart data'); // This is line 164
+      throw new Error('AI returned incomplete chart data');
     }
     
     // 5. Send the pure JSON data back to the frontend
