@@ -56,6 +56,7 @@ async function callGemini(payload, retryCount = 3) {
       }
       
       const extractedJsonText = result.candidates[0].content.parts[0].text;
+      // This is line 59, where the error was happening
       return JSON.parse(extractedJsonText); // Return the parsed JSON
 
     } catch (error) {
@@ -98,6 +99,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   }
 
   // 2. Define the *single, powerful* system prompt
+  // --- NEW, MORE PRECISE SANITIZATION RULE ---
   const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a complete Gantt chart data object.
   
   You MUST respond with *only* a valid JSON object matching the schema.
@@ -112,8 +114,8 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       - 1-3 years total: Use "Quarters" (e.g., ["Q1 2026", "Q2 2026"])
       - 3+ years total: You MUST use "Years" (e.g., ["2020", "2021", "2022"])
   3.  **CHART DATA:** Create the 'data' array.
-      - First, identify all logical swimlanes (e.g., "Regulatory Drivers", "JPMorgan Chase"). Add an object for each: \`{ "title": "Swimlane Name", "isSwimlane": true }\`
-      - Immediately after each swimlane, add all tasks that belong to it: \`{ "title": "Task Name", "isSwimlane": false, "bar": { ... } }\`
+      - First, identify all logical swimlanes (e.g., "Regulatory Drivers", "JPMorgan Chase"). Add an object for each: \`{ "title": "Swimlane Name", "isSwimlane": true, "entity": "Swimlane Name" }\`
+      - Immediately after each swimlane, add all tasks that belong to it: \`{ "title": "Task Name", "isSwimlane": false, "entity": "Swimlane Name", "bar": { ... } }\`
       - **DO NOT** create empty swimlanes. If you find no tasks for an entity, do not include it.
   4.  **BAR LOGIC:**
       - 'startCol' is the 1-based index of the 'timeColumns' array where the task begins.
@@ -122,7 +124,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
       - If a date is "Q1 2024" and the interval is "Years", "2024" is the column. Map it to the "2024" column index.
       - If a date is unknown ("null"), the 'bar' object must be \`{ "startCol": null, "endCol": null, "color": "..." }\`.
   5.  **COLORS:** Assign colors logically ("blue", "ochre", "orange", "green", "default").
-  6.  **SANITIZATION:** All strings MUST be clean (no newlines, tabs, or double quotes).`;
+  6.  **SANITIZATION:** All string values MUST be valid JSON strings. You MUST properly escape any characters that would break JSON, such as double quotes (\") and newlines (\\n), within the string value itself.`;
   
   const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchTextCache}`;
 
@@ -142,7 +144,6 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
           properties: {
             title: { type: "STRING" },
             isSwimlane: { type: "BOOLEAN" },
-            // NEW: Add entity to the data row for the frontend
             entity: { type: "STRING" }, 
             bar: {
               type: "OBJECT",
@@ -151,7 +152,6 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
                 endCol: { type: "NUMBER" },
                 color: { type: "STRING" }
               },
-              // startCol and endCol are not required, can be null
             }
           },
           required: ["title", "isSwimlane", "entity"]
@@ -177,6 +177,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 5. Call the API
   try {
+    // This is line 180 (where the callGemini function is invoked)
     const ganttData = await callGemini(payload);
     
     // 6. Send the Gantt data to the frontend
@@ -209,7 +210,7 @@ app.post('/get-task-analysis', async (req, res) => {
   2.  **CITE SOURCES:** For every 'fact' and 'assumption', you MUST cite the 'source' (e.g., "FileA.docx", "User Prompt").
   3.  **DETERMINE STATUS:** Determine the task's 'status' ("completed", "in-progress", or "not-started") based on the current date (assume "November 2025") and the task's dates.
   4.  **PROVIDE RATIONALE:** You MUST provide a 'rationale' for 'in-progress' and 'not-started' tasks, analyzing the likelihood of on-time completion based on the 'facts' and 'assumptions'.
-  5.  **CLEAN STRINGS:** All string values MUST be sanitized (no newlines, tabs, or double quotes).`;
+  5.  **CLEAN STRINGS:** All string values MUST be valid JSON strings. You MUST properly escape any characters that would break JSON, such as double quotes (\") and newlines (\\n).`;
   
   const geminiUserQuery = `Research Content:\n${researchTextCache}\n\n**YOUR TASK:** Provide a full, detailed analysis for this specific task:
   - Entity: "${entity}"
