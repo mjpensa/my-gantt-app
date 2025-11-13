@@ -7,7 +7,6 @@ import { dirname, join } from 'path';
 import 'dotenv/config';
 
 // --- Gemini API Configuration ---
-// We will use the v1beta model for JSON schema support
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${process.env.API_KEY}`;
 // ---
 
@@ -27,7 +26,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   const userPrompt = req.body.prompt;
   let researchText = "";
 
-  // 1. Extract text from uploaded files
+  // 1. Extract text from uploaded files (same as before)
   try {
     if (req.files) {
       for (const file of req.files) {
@@ -48,15 +47,20 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
   // 2. Build the prompt for the Gemini API
   //
-  // <-- UPDATED PROMPT: Added "DATA ONLY" rule.
+  // <-- UPDATED PROMPT: Now asks for "thoughts" *then* the JSON block.
   //
-  const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart. You must respond ONLY with a valid JSON object matching the defined schema.
+  const geminiSystemPrompt = `You are an expert project management analyst. Your job is to analyze a user's prompt and research files to build a Gantt chart.
   
-  **CRITICAL RULES FOR JSON OUTPUT:**
-  1.  **DATA ONLY:** The JSON fields are for *data only*. **DO NOT** add any notes, commentary, summaries, or explanations (like "CRITICAL NOTE: ...") into the JSON data fields. The 'title' field should contain *only* the chart's title, and nothing else.
-  2.  **NO INFERENCE:** For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text. **Do not make up or infer your own summaries.**
-  3.  **CONCISE TITLES:** If a heading or phrase is very long, shorten it, but stick to the original words. Keep all titles under 150 characters.
+  First, write a brief summary of your analysis (your thought process).
+  
+  Then, on a new line, provide the final JSON data block enclosed in triple backticks (```json ... ```).
+  
+  **CRITICAL RULES FOR THE JSON BLOCK:**
+  1.  **DATA ONLY:** The JSON fields are for *data only*. **DO NOT** add any notes or commentary *inside* the JSON.
+  2.  **NO INFERENCE:** For all 'title' fields, you MUST use an existing heading, sub-heading, or key phrase directly from the provided text.
+  3.  **CONCISE TITLES:** Keep all titles under 150 characters.
   4.  **CLEAN STRINGS:** All string values MUST be sanitized. Remove all newlines (\\n), tabs (\\t), and double quotes (") from the text. Replace them with a single space.
+  5.  **MANDATORY BAR OBJECT:** If 'isSwimlane' is false, the 'bar' object MUST be included. If no dates are found, set 'startCol' and 'endCol' to 'null'.
   
   **TIME LOGIC:**
   - 1-8 weeks: Use "Weeks" (e.g., ["W1", "W2"])
@@ -66,58 +70,31 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
   
   **BAR LOGIC:**
   - 'startCol' is the 1-based index of the column where the task begins.
-  - 'endCol' is the 1-based index of the column where the task ends, PLUS ONE. A task in "W1" has startCol: 1, endCol: 2. A task from "W1" to "W2" has startCol: 1, endCol: 3.
+  - 'endCol' is the 1-based index of the column where the task ends, PLUS ONE.
+  - If no dates are found, set 'startCol' and 'endCol' to 'null'.
   - Assign colors logically ("blue", "ochre", "orange", "green").`;
   
   const geminiUserQuery = `User Prompt: "${userPrompt}"\n\nResearch Content:\n${researchText}`;
   
-  // 3. Define the strict JSON output schema
-  const schema = {
-    type: "OBJECT",
-    properties: {
-      title: { type: "STRING" },
-      timeColumns: {
-        type: "ARRAY",
-        items: { type: "STRING" }
-      },
-      data: {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            title: { type: "STRING" },
-            isSwimlane: { type: "BOOLEAN" },
-            bar: {
-              type: "OBJECT",
-              properties: {
-                startCol: { type: "NUMBER" },
-                endCol: { type: "NUMBER" },
-                color: { type: "STRING" }
-              }
-            }
-          }
-        }
-      }
+  // 3. Define the payload
+  //
+  // <-- UPDATED PAYLOAD: Removed 'responseSchema' and 'responseMimeType: "application/json"'.
+  //
+  const payload = {
+    contents: [{ parts: [{ text: geminiUserQuery }] }],
+    systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
+    generationConfig: {
+      maxOutputTokens: 8192,
+      temperature: 0.2
     }
   };
 
   // 4. Call the Gemini API
   try {
-    const payload = {
-      contents: [{ parts: [{ text: geminiUserQuery }] }],
-      systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        maxOutputTokens: 8192,
-        temperature: 0.2
-      }
-    };
-
     let ganttData = null;
     let lastError = null;
     
-    // Retry up to 3 times for JSON parsing errors
+    // Retry up to 3 times
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await fetch(API_URL, {
@@ -133,14 +110,31 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
 
         const result = await response.json();
         
-        // Check if API returned valid data
         if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
           console.error('Invalid API response:', JSON.stringify(result));
           throw new Error('Invalid response from AI API');
         }
         
-        const jsonText = result.candidates[0].content.parts[0].text;
-        ganttData = JSON.parse(jsonText);
+        //
+        // <-- NEW PARSING LOGIC ---
+        //
+        const fullResponseText = result.candidates[0].content.parts[0].text;
+        
+        // 1. Extract the JSON block using a regular expression
+        const jsonMatch = fullResponseText.match(/```json\n([\s\S]*?)\n```/);
+        
+        if (!jsonMatch || !jsonMatch[1]) {
+          console.error("Could not find JSON block in AI response:", fullResponseText);
+          throw new Error("AI failed to provide a valid JSON data block.");
+        }
+        
+        const extractedJsonText = jsonMatch[1];
+        
+        // 2. Parse the extracted text
+        ganttData = JSON.parse(extractedJsonText);
+        //
+        // <-- END OF NEW PARSING LOGIC ---
+        //
         
         // If we got here, parsing succeeded
         break;
@@ -161,7 +155,7 @@ app.post('/generate-chart', upload.array('researchFiles'), async (req, res) => {
     // Validate ganttData structure
     if (!ganttData.timeColumns || !ganttData.data) {
       console.error('Invalid gantt data structure:', ganttData);
-      throw new Error('AI returned incomplete chart data'); // This is the error you are seeing
+      throw new Error('AI returned incomplete chart data'); // This is line 164
     }
     
     // 5. Send the pure JSON data back to the frontend
