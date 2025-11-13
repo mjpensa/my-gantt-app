@@ -3,7 +3,8 @@ import multer from 'multer';
 import mammoth from 'mammoth';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } in 'path';
+// This is the fixed line (it now says 'from' instead of 'in')
+import { dirname, join } from 'path'; 
 import 'dotenv/config';
 
 // --- Gemini API Configuration ---
