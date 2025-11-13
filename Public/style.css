@@ -1,277 +1,4 @@
-/* 1. Import the professional sans-serif font */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-
-/* 2. Set the background and default font for the page */
-body {
-  font-family: 'Inter', sans-serif;
-  background-color: #f3f4f6; /* Light grey background */
-  padding: 24px;
-  color: #111827;
-  margin: 0;
-}
-
-.app-container {
-  max-width: 1400px;
-  margin: 0 auto;
-}
-
-.app-title {
-  text-align: center;
-  font-weight: 600;
-  font-size: 24px;
-  color: #111827;
-  margin-bottom: 24px;
-}
-
-/* 3. Form Styling */
-.gantt-form {
-  background-color: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  padding: 24px;
-  margin-bottom: 24px;
-}
-.form-group {
-  margin-bottom: 16px;
-}
-.form-group label {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 6px;
-}
-.form-group textarea, .form-group input[type="file"] {
-  width: 100%;
-  padding: 10px 12px;
-  font-size: 14px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  box-sizing: border-box; /* Important for 100% width */
-}
-.form-group textarea {
-  resize: vertical;
-  min-height: 60px;
-}
-
-.form-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-top: 20px;
-}
-
-.generate-button {
-  font-family: 'Inter', sans-serif;
-  font-size: 14px;
-  font-weight: 600;
-  color: #ffffff;
-  background-color: #007bff;
-  border: none;
-  border-radius: 6px;
-  padding: 10px 20px;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  transition: all 0.2s;
-}
-.generate-button:hover {
-  background-color: #0056b3;
-}
-.generate-button:disabled {
-  background-color: #a0aec0;
-  cursor: not-allowed;
-}
-
-/* 4. Loading Indicator */
-.loading-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: #4b5563;
-}
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #007bff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* 5. Error Message */
-.error-message {
-  background-color: #fee2e2;
-  color: #b91c1c;
-  border: 1px solid #fca5a5;
-  border-radius: 6px;
-  padding: 16px;
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 24px;
-}
-
-
-/* --- GANTT CHART STYLES (Unchanged) --- */
-
-/* 6. Gantt Chart Container */
-#gantt-chart-container {
-  width: 100%;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  background-color: #ffffff;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  overflow: hidden;
-  margin-top: 24px;
-}
-
-/* 7. Chart Title */
-.gantt-title {
-  text-align: center;
-  font-size: 20px;
-  font-weight: 600;
-  padding: 16px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-/* 8. Main Grid Layout */
-.gantt-grid {
-  display: grid;
-  width: 100%;
-}
-
-/* 9. Grid Header (Weeks) */
-.gantt-header {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 12px 8px;
-  text-align: center;
-  background-color: #f9fafb;
-  border-bottom: 1px solid #e0e0e0;
-  border-left: 1px solid #e0e0e0;
-}
-.gantt-header-label { /* First header cell (empty) */
-  border-left: 0;
-}
-
-/* 10. Row Label (Swimlane or Task) */
-.gantt-row-label {
-  padding: 10px 12px;
-  font-size: 13px;
-  border-bottom: 1px solid #f0f0f0;
-  white-space: nowrap;
-}
-
-.gantt-row-label.swimlane {
-  font-weight: 600; /* BOLD SWIMLANE */
-  color: #000;
-  background-color: #E5E7EB; /* Light grey swimlane background */
-}
-
-.gantt-row-label.task {
-  padding-left: 24px; /* THIS is our indent */
-  font-weight: 400;
-  color: #333;
-  border-bottom: 1px dotted #e0e0e0;
-  transition: background-color 0.2s;
-}
-
-/* --- NEW: Hover/Cursor for clickable tasks --- */
-.gantt-row-label.task:hover {
-  background-color: #f0f8ff; /* Light alice blue */
-  cursor: pointer;
-}
-
-/* 11. Bar Area */
-.gantt-bar-area {
-  position: relative; 
-  display: grid;
-  border-left: 1px solid #e0e0e0;
-  border-bottom: 1px dotted #e0e0e0;
-}
-/* --- NEW: Hover/Cursor for clickable tasks --- */
-.gantt-bar-area.task:hover {
-  background-color: #f0f8ff;
-  cursor: pointer;
-}
-
-.gantt-bar-area.swimlane {
-  background-color: #E5E7EB; /* Match the label background */
-  border-bottom: 1px solid #f0f0f0; /* Match label border */
-}
-
-/* Vertical grid lines */
-.gantt-bar-area span[data-col] {
-  border-right: 1px solid #f0f0f0;
-}
-
-/* 12. The Actual Bar */
-.gantt-bar {
-  position: relative;
-  height: 20px;
-  margin: 6px 4px; /* Vertical centering, small horizontal gap */
-  border-radius: 4px;
-  color: white;
-  z-index: 2;
-  overflow: hidden;
-  grid-row: 1; /* Always on the first (and only) row of its container */
-}
-
-/* Bar Colors */
-.gantt-bar[data-color="blue"] { background-color: #008FFB; }
-.gantt-bar[data-color="ochre"] { background-color: #FEB019; }
-.gantt-bar[data-color="orange"] { background-color: #FF4560; }
-.gantt-bar[data-color="green"] { background-color: #00E396; }
-.gantt-bar[data-color="default"] { background-color: #6B7280; } /* Fallback color */
-
-/* 13. Export Button Styling */
-.export-container {
-  display: flex;
-  justify-content: center;
-  padding: 20px 0 0 0;
-}
-.export-button {
-  font-family: 'Inter', sans-serif;
-  font-size: 14px;
-  font-weight: 600;
-  color: #ffffff;
-  background-color: #10B981; /* Green */
-  border: none;
-  border-radius: 6px;
-  padding: 10px 20px;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  transition: background-color 0.2s;
-}
-.export-button:hover {
-  background-color: #059669;
-}
-.export-button:disabled {
-  background-color: #a0aec0;
-  cursor: not-allowed;
-}
-
-/* ------------------------------------------------------------------- */
-/* --- NEW: ANALYSIS MODAL STYLES --- */
-/* ------------------------------------------------------------------- */
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-  padding: 24px;
-  box-sizing: border-box;
-}
-
+// ... existing code ...
 .modal-content {
   background-color: #ffffff;
   border-radius: 8px;
@@ -285,28 +12,7 @@ body {
 }
 
 .modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.modal-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #111827;
-  margin: 0;
-}
-
-.modal-close {
-  font-size: 28px;
-  font-weight: 300;
-  color: #9ca3af;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
+// ... existing code ...
   line-height: 1;
 }
 .modal-close:hover {
@@ -316,96 +22,131 @@ body {
 .modal-body {
   padding: 24px;
   overflow-y: auto;
+  flex-grow: 1; /* NEW: Allows body to fill space */
+  display: flex; /* NEW */
+  flex-direction: column; /* NEW */
+  gap: 20px; /* NEW: Space between analysis and chat */
+}
+
+/* Container for the initial analysis */
+#modal-analysis-content {
+  flex-shrink: 0; /* Prevent analysis from shrinking */
 }
 
 .modal-spinner {
-  width: 32px;
-  height: 32px;
-  border: 4px solid #e5e7eb;
-  border-top-color: #007bff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 40px auto;
-}
-
-.modal-error {
-  color: #b91c1c;
-  font-weight: 500;
-  text-align: center;
-  padding: 20px;
-}
-
-.analysis-section {
-  margin-bottom: 20px;
-}
-.analysis-section:last-child {
-  margin-bottom: 0;
-}
-
-.analysis-section h4 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #111827;
-  margin-top: 0;
-  margin-bottom: 8px;
-  border-bottom: 1px solid #f3f4f6;
-  padding-bottom: 4px;
-}
-
-.analysis-section p {
-  font-size: 14px;
-  color: #374151;
-  line-height: 1.6;
-  margin: 0;
-}
-
-.status-pill {
-  display: inline-block;
-  padding: 3px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: 999px;
-  text-transform: capitalize;
-}
-.status-pill.status-completed {
-  color: #065f46;
-  background-color: #d1fae5;
-}
-/* Handle "in-progress" with a dash */
-.status-pill.status-in-progress {
-  color: #92400e;
-  background-color: #fef3c7;
-}
-/* Handle "not-started" with a dash */
-.status-pill.status-not-started {
-  color: #991b1b;
-  background-color: #fee2e2;
-}
-.status-pill.status-n\/a {
-  color: #374151;
-  background-color: #f3f4f6;
-}
-
-
-.analysis-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.analysis-list li {
-  padding: 8px 0;
-  border-bottom: 1px solid #f3f4f6;
-}
-.analysis-list li:last-child {
-  border-bottom: 0;
-}
-.analysis-list li p {
-  margin: 0;
-  font-size: 14px;
-  color: #374151;
-}
+// ... existing code ...
 .analysis-list li .source {
   font-size: 12px;
   color: #6b7280;
   font-style: italic;
+}
+
+/* ------------------------------------------------------------------- */
+/* --- NEW: CHAT INTERFACE STYLES --- */
+/* ------------------------------------------------------------------- */
+
+.modal-footer {
+  padding: 12px 24px;
+  border-top: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+  flex-shrink: 0; /* Prevent footer from shrinking */
+}
+
+#modal-chat-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#modal-chat-input {
+  flex-grow: 1;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+#modal-chat-input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0,123,255,0.2);
+}
+#modal-chat-input:disabled {
+  background-color: #f3f4f6;
+}
+
+#modal-chat-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background-color: #007bff;
+  color: white;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+#modal-chat-send-btn:hover {
+  background-color: #0056b3;
+}
+#modal-chat-send-btn:disabled {
+  background-color: #a0aec0;
+  cursor: not-allowed;
+}
+
+#modal-chat-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.chat-message {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-message.user {
+  background-color: #007bff;
+  color: white;
+  border-bottom-right-radius: 4px;
+  align-self: flex-end;
+}
+
+.chat-message.ai {
+  background-color: #f3f4f6;
+  color: #111827;
+  border-bottom-left-radius: 4px;
+  align-self: flex-start;
+}
+
+.chat-message.ai-error {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  align-self: flex-start;
+}
+
+.chat-message.ai-typing {
+  background-color: #f3f4f6;
+  color: #111827;
+  border-bottom-left-radius: 4px;
+  align-self: flex-start;
+  padding: 12px 14px;
+}
+
+.chat-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #d1d5db;
+  border-top-color: #6b7280;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }

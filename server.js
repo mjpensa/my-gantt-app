@@ -265,6 +265,125 @@ app.post('/get-task-analysis', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------------
+// --- NEW: "ON-DEMAND" CHAT ENDPOINT ---
+// -------------------------------------------------------------------
+app.post('/chat-on-analysis', async (req, res) => {
+  const { taskName, entity, userQuestion, chatHistory } = req.body;
+
+  if (!userQuestion || !taskName || !entity) {
+    return res.status(400).json({ error: "Missing required chat context." });
+  }
+
+  // 1. Define the "Analyst Chat" prompt
+  const geminiSystemPrompt = `You are a senior project management analyst. You are in a chat with a user discussing a specific task: "${taskName}" for the entity "${entity}".
+  
+You must answer the user's questions based *only* on the provided chat history and the original research content.
+  
+**CRITICAL RULES:**
+1.  **STAY ON TOPIC:** Your answers must relate *only* to the task being discussed ("${taskName}") and the provided research text.
+2.  **USE PROVIDED CONTEXT:** Base all answers on the research text. Do not make up new facts or infer information not present.
+3.  **BE CONCISE:** Provide clear, concise answers to the user's follow-up questions.
+4.  **NO JSON:** Respond in plain text. Do not format your answer as JSON.`;
+
+  // 2. Construct the conversation history for the AI
+  const contents = [
+    {
+      role: "model",
+      parts: [{ text: "I am a project analyst. Ask me follow-up questions about this task." }]
+    }
+  ];
+
+  // Add previous chat history
+  if (Array.isArray(chatHistory)) {
+    chatHistory.forEach(msg => {
+      contents.push({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+      });
+    });
+  }
+
+  // Add the new user question
+  contents.push({
+    role: "user",
+    parts: [{ text: userQuestion }]
+  });
+  
+  // Add the research text as the *final* piece of context for the user's last question
+  contents.push({
+    role: "model",
+    parts: [{ text: `--- Reference Research Content ---\n${researchTextCache}` }]
+  });
+
+  // 3. Define the payload (note: no JSON schema)
+  const payload = {
+    contents: contents, // Send the constructed history
+    systemInstruction: { parts: [{ text: geminiSystemPrompt }] },
+    generationConfig: {
+      maxOutputTokens: 1024,
+      temperature: 0.2,
+      topP: 1,
+      topK: 1
+    }
+  };
+
+  // 4. Call the API (using a modified helper to get plain text)
+  try {
+    const aiResponseText = await callGeminiForText(payload);
+    res.json({ answer: aiResponseText }); // Send the plain text answer
+  } catch (e) {
+    console.error("Chat API error:", e);
+    res.status(500).json({ error: `Error in chat: ${e.message}` });
+  }
+});
+
+/**
+ * --- NEW: Helper Function for simple text API Calls ---
+ */
+async function callGeminiForText(payload, retryCount = 3) {
+  for (let attempt = 0; attempt < retryCount; attempt++) {
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API call failed with status: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+
+      if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
+        console.error('Invalid API response:', JSON.stringify(result));
+        throw new Error('Invalid response from AI API');
+      }
+
+      const safetyRatings = result.candidates[0].safetyRatings;
+      if (safetyRatings) {
+        const blockedRating = safetyRatings.find(rating => rating.blocked);
+        if (blockedRating) {
+          throw new Error(`API call blocked due to safety rating: ${blockedRating.category}`);
+        }
+      }
+      
+      // Return plain text, not parsed JSON
+      return result.candidates[0].content.parts[0].text; 
+
+    } catch (error) {
+      console.log(`Attempt ${attempt + 1} failed:`, error.message);
+      if (attempt >= retryCount - 1) {
+        throw error; // Throw the last error
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  throw new Error('All API retry attempts failed.');
+}
+
 
 // -------------------------------------------------------------------
 // --- "BUILDER" & HELPER FUNCTIONS (Deterministic) ---
